@@ -5,5 +5,8 @@
 
 @rem CMAKE_GENERATOR_PLATFORM ... 64bit環境
 @%CMAKE% -DCMAKE_GENERATOR_PLATFORM=x64
+@rem %CMAKE% -G "Visual Studio 14 2015 Win64"
 
-pause
+@pause
+
+@start MyProject.sln
