@@ -1,4 +1,3 @@
-#include <iostream>
 #include <vector>
 #include <cassert>
 
@@ -6,10 +5,6 @@
 
 int main(int argc, char* argv[])
 {
-    using namespace std;
-    
-    cout << "Hello World" << endl;
-
 	uint32_t InstanceLayerPropertyCount = 0;
 	vkEnumerateInstanceLayerProperties(&InstanceLayerPropertyCount, nullptr);
 	if (InstanceLayerPropertyCount) {
