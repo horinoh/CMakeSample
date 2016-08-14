@@ -3,6 +3,7 @@ project(Vulkan)
 
 # パッケージ検索
 # XXXConfig.cmake または xxx-config.cmake という名前のファイルを検索する
+set(VULKAN_DIR .)
 find_package(VULKAN REQUIRED)
 if(VULKAN_FOUND)
     include_directories(${VULKAN_INCLUDE_DIRS})
