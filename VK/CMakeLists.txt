@@ -5,12 +5,27 @@ project(${ProjectName})
 
 # パッケージ検索
 # XXXConfig.cmake または xxx-config.cmake という名前のファイルを検索する
+# VULKAN
 set(VULKAN_DIR .)
 find_package(VULKAN REQUIRED)
 if(VULKAN_FOUND)
     include_directories(${VULKAN_INCLUDE_DIRS})
     link_directories(${VULKAN_LIBRARY_DIRS})
     add_definitions(${VULKAN_DEFINITIONS})
+endif()
+
+# GLM
+set(GLM_DIR .)
+find_package(GLM REQUIRED)
+if(GLM_FOUND)
+    include_directories(${GLM_INCLUDE_DIRS})
+endif()
+
+# GLI
+set(GLI_DIR .)
+find_package(GLI REQUIRED)
+if(GLI_FOUND)
+    include_directories(${GLI_INCLUDE_DIRS})
 endif()
 
 file(GLOB_RECURSE SourceFiles ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
