@@ -35,6 +35,7 @@
 #endif
 
 #define DRAW_PLOYGON
+#define USE_DEPTH_STENCIL
 
 namespace VK {
 	VkInstance Instance = VK_NULL_HANDLE;
@@ -85,6 +86,11 @@ namespace VK {
 	std::vector<VkImageView> SwapchainImageViews;
 	uint32_t SwapchainImageIndex;
 
+	VkFormat DepthFormat = VK_FORMAT_D24_UNORM_S8_UINT;
+	VkImage DepthStencilImage = VK_NULL_HANDLE;
+	VkDeviceMemory DepthStencilDeviceMemory = VK_NULL_HANDLE;
+	VkImageView DepthStencilImageView = VK_NULL_HANDLE;
+
 	std::vector<VkShaderModule> ShaderModules;
 	std::vector<VkPipelineShaderStageCreateInfo> PipelineShaderStageCreateInfos;
 
@@ -110,12 +116,93 @@ namespace VK {
 
 	VkPipeline Pipeline = VK_NULL_HANDLE;
 
+	const VkClearColorValue SkyBlue = { 0.529411793f, 0.807843208f, 0.921568692f, 1.0f };
 	const std::vector<VkClearValue> ClearValues = {
 		{
-			{ 0.529411793f, 0.807843208f, 0.921568692f, 1.0f },
+			{ SkyBlue },
 			{ 1.0f, 0 }
 		}
 	};
+
+	static VkAccessFlags GetSrcAccessMask(VkImageLayout Old, VkImageLayout New)
+	{
+		VkAccessFlags SrcAccessMask = 0;
+		switch (Old) {
+		case VK_IMAGE_LAYOUT_UNDEFINED: break;
+		case VK_IMAGE_LAYOUT_PREINITIALIZED: SrcAccessMask = VK_ACCESS_HOST_WRITE_BIT; break;
+		case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: SrcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT; break;
+		case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL: SrcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT; break;
+		case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL: SrcAccessMask = VK_ACCESS_TRANSFER_READ_BIT; break;
+		case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: SrcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; break;
+		case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: SrcAccessMask = VK_ACCESS_SHADER_READ_BIT; break;
+		}
+		switch (New)
+		{
+		case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL: SrcAccessMask |= VK_ACCESS_TRANSFER_READ_BIT; break;
+		case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: SrcAccessMask = VK_ACCESS_TRANSFER_READ_BIT; break;
+		case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+			if (0 == SrcAccessMask) {
+				SrcAccessMask = VK_ACCESS_HOST_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+			}
+			break;
+		}
+		return SrcAccessMask;
+	}
+	static VkAccessFlags GetDstAccessMask(VkImageLayout New)
+	{
+		switch (New)
+		{
+		case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: return VK_ACCESS_TRANSFER_WRITE_BIT;
+		case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL: return VK_ACCESS_TRANSFER_READ_BIT;
+		case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: return VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL: return VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+		case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: return VK_ACCESS_SHADER_READ_BIT;
+		}
+		return 0;
+	}
+	void SetImageLayout(VkCommandBuffer CommandBuffer, VkImage Image, VkImageLayout Old, VkImageLayout New)
+	{
+		const auto SrcAccessMask = GetSrcAccessMask(Old, New);
+		const auto DstAccessMask = GetDstAccessMask(New);
+
+		const VkImageSubresourceRange ImageSubresourceRange = {
+			VK_IMAGE_ASPECT_COLOR_BIT,
+			0, 1,
+			0, 1,
+		};
+		const VkImageMemoryBarrier ImageMemoryBarrier = {
+			VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+			nullptr,
+			SrcAccessMask,
+			DstAccessMask,
+			Old,
+			New,
+			VK_QUEUE_FAMILY_IGNORED,
+			VK_QUEUE_FAMILY_IGNORED,
+			Image,
+			ImageSubresourceRange
+		};
+		vkCmdPipelineBarrier(CommandBuffer,
+			VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+			VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+			0,
+			0, nullptr,
+			0, nullptr,
+			1, &ImageMemoryBarrier);
+	}
+	uint32_t GetMemoryTypeIndex(uint32_t MemoryTypeBits, VkMemoryPropertyFlags MemoryPropertyFlags)
+	{
+		for (uint32_t i = 0; i < PhysicalDeviceMemoryProperties.memoryTypeCount; i++) {
+			if ((MemoryTypeBits & 1) == 1) {
+				if ((PhysicalDeviceMemoryProperties.memoryTypes[i].propertyFlags & MemoryPropertyFlags) == MemoryPropertyFlags) {
+					return i;
+				}
+			}
+			MemoryTypeBits >>= 1;
+		}
+		assert(false && "");
+		return 0xffffffff;
+	}
 
 	void ExecuteCommandBuffer()
 	{
@@ -359,8 +446,6 @@ namespace VK {
 			0
 		};
 		VERIFY_SUCCEEDED(vkCreateFence(Device, &FenceCreateInfo, nullptr, &Fence));
-
-
 	}
 	void CreateSemaphore()
 	{
@@ -370,72 +455,6 @@ namespace VK {
 			0
 		};
 		VERIFY_SUCCEEDED(vkCreateSemaphore(Device, &SemaphoreCreateInfo, nullptr, &PresentSemaphore));
-	}
-	static VkAccessFlags GetSrcAccessMask(VkImageLayout Old, VkImageLayout New)
-	{
-		VkAccessFlags SrcAccessMask = 0;
-		switch (Old) {
-		case VK_IMAGE_LAYOUT_UNDEFINED: break;
-		case VK_IMAGE_LAYOUT_PREINITIALIZED: SrcAccessMask = VK_ACCESS_HOST_WRITE_BIT; break;
-		case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: SrcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT; break;
-		case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL: SrcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT; break;
-		case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL: SrcAccessMask = VK_ACCESS_TRANSFER_READ_BIT; break;
-		case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: SrcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; break;
-		case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: SrcAccessMask = VK_ACCESS_SHADER_READ_BIT; break;
-		}
-		switch (New)
-		{
-		case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL: SrcAccessMask |= VK_ACCESS_TRANSFER_READ_BIT; break;
-		case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: SrcAccessMask = VK_ACCESS_TRANSFER_READ_BIT; break;
-		case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-			if (0 == SrcAccessMask) {
-				SrcAccessMask = VK_ACCESS_HOST_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-			}
-			break;
-		}
-		return SrcAccessMask;
-	}
-	static VkAccessFlags GetDstAccessMask(VkImageLayout New)
-	{
-		switch (New)
-		{
-		case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: return VK_ACCESS_TRANSFER_WRITE_BIT;
-		case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL: return VK_ACCESS_TRANSFER_READ_BIT;
-		case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: return VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-		case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL: return VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-		case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: return VK_ACCESS_SHADER_READ_BIT;
-		}
-		return 0;
-	}
-	void SetImageLayout(VkCommandBuffer CommandBuffer, VkImage Image, VkImageLayout Old, VkImageLayout New)
-	{
-		const auto SrcAccessMask = GetSrcAccessMask(Old, New);
-		const auto DstAccessMask = GetDstAccessMask(New);
-
-		const VkImageSubresourceRange ImageSubresourceRange = {
-			VK_IMAGE_ASPECT_COLOR_BIT,
-			0, 1,
-			0, 1,
-		};
-		const VkImageMemoryBarrier ImageMemoryBarrier = {
-			VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-			nullptr,
-			SrcAccessMask,
-			DstAccessMask,
-			Old,
-			New,
-			VK_QUEUE_FAMILY_IGNORED,
-			VK_QUEUE_FAMILY_IGNORED,
-			Image,
-			ImageSubresourceRange
-		};
-		vkCmdPipelineBarrier(CommandBuffer,
-			VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-			VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-			0,
-			0, nullptr,
-			0, nullptr,
-			1, &ImageMemoryBarrier);
 	}
 	void CreateSwapchain(HINSTANCE hInst, HWND hWnd)
 	{
@@ -562,6 +581,60 @@ namespace VK {
 	}
 	void CreateDepthStencil()
 	{
+#ifdef USE_DEPTH_STENCIL
+		const VkExtent3D Extent3D = { SurfaceExtent2D.width, SurfaceExtent2D.height, 1 };
+		const VkImageCreateInfo ImageCreateInfo = {
+			VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+			nullptr,
+			0,
+			VK_IMAGE_TYPE_2D,
+			DepthFormat,
+			Extent3D,
+			1,
+			1,
+			VK_SAMPLE_COUNT_1_BIT,
+			VK_IMAGE_TILING_OPTIMAL,
+			VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+			VK_SHARING_MODE_EXCLUSIVE,
+			0, nullptr,
+			VK_IMAGE_LAYOUT_UNDEFINED
+		};
+		VERIFY_SUCCEEDED(vkCreateImage(Device, &ImageCreateInfo, nullptr, &DepthStencilImage));
+
+		VkMemoryRequirements MemoryRequirements;
+		vkGetImageMemoryRequirements(Device, DepthStencilImage, &MemoryRequirements);
+		const VkMemoryAllocateInfo MemoryAllocateInfo = {
+			VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+			nullptr,
+			MemoryRequirements.size,
+			GetMemoryTypeIndex(MemoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+		};
+		VERIFY_SUCCEEDED(vkAllocateMemory(Device, &MemoryAllocateInfo, nullptr, &DepthStencilDeviceMemory));
+		VERIFY_SUCCEEDED(vkBindImageMemory(Device, DepthStencilImage, DepthStencilDeviceMemory, 0));
+
+		const VkComponentMapping ComponentMapping = {
+			VK_COMPONENT_SWIZZLE_R,
+			VK_COMPONENT_SWIZZLE_G,
+			VK_COMPONENT_SWIZZLE_B,
+			VK_COMPONENT_SWIZZLE_A
+		};
+		const VkImageSubresourceRange ImageSubresourceRange = {
+			VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT,
+			0, 1,
+			0, 1
+		};
+		const VkImageViewCreateInfo ImageViewCreateInfo = {
+			VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+			nullptr,
+			0,
+			DepthStencilImage,
+			VK_IMAGE_VIEW_TYPE_2D,
+			DepthFormat,
+			ComponentMapping,
+			ImageSubresourceRange
+		};
+		VERIFY_SUCCEEDED(vkCreateImageView(Device, &ImageViewCreateInfo, nullptr, &DepthStencilImageView));
+#endif
 	}
 	VkShaderModule CreateShaderModule(const std::wstring& Path)
 	{
@@ -649,19 +722,6 @@ namespace VK {
 			static_cast<uint32_t>(VertexInputAttributeDescriptions.size()), VertexInputAttributeDescriptions.data()
 		};
 #endif
-	}
-	uint32_t GetMemoryTypeIndex(uint32_t MemoryTypeBits, VkMemoryPropertyFlags MemoryPropertyFlags)
-	{
-		for (uint32_t i = 0; i < PhysicalDeviceMemoryProperties.memoryTypeCount; i++) {
-			if ((MemoryTypeBits & 1) == 1) {
-				if ((PhysicalDeviceMemoryProperties.memoryTypes[i].propertyFlags & MemoryPropertyFlags) == MemoryPropertyFlags) {
-					return i;
-				}
-			}
-			MemoryTypeBits >>= 1;
-		}
-		assert(false && "");
-		return 0xffffffff;
 	}
 	void CreateBuffer(VkBuffer* Buffer, VkDeviceMemory* DeviceMemory, const void *Source, const VkDeviceSize Size)
 	{
@@ -794,7 +854,20 @@ namespace VK {
 				VK_ATTACHMENT_STORE_OP_DONT_CARE,
 				VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
 				VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-			}
+			},
+#ifdef USE_DEPTH_STENCIL
+			{
+				0,
+				DepthFormat,
+				VK_SAMPLE_COUNT_1_BIT,
+				VK_ATTACHMENT_LOAD_OP_CLEAR,
+				VK_ATTACHMENT_STORE_OP_DONT_CARE,
+				VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+				VK_ATTACHMENT_STORE_OP_DONT_CARE,
+				VK_IMAGE_LAYOUT_UNDEFINED,
+				VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+			},
+#endif
 		};
 		const std::vector<VkAttachmentReference> ColorAttachmentReferences = {
 			{
@@ -802,6 +875,12 @@ namespace VK {
 				VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
 			}
 		};
+#ifdef USE_DEPTH_STENCIL
+		const VkAttachmentReference DepthAttachmentReferences = {
+			1,
+			VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+		};
+#endif
 		const std::vector<VkSubpassDescription> SubpassDescriptions = {
 			{
 				0,
@@ -809,7 +888,11 @@ namespace VK {
 				0, nullptr,
 				static_cast<uint32_t>(ColorAttachmentReferences.size()), ColorAttachmentReferences.data(),
 				nullptr,
+#ifdef USE_DEPTH_STENCIL
+				&DepthAttachmentReferences,
+#else
 				nullptr,
+#endif
 				0, nullptr
 			}
 		};
@@ -829,6 +912,9 @@ namespace VK {
 		for (uint32_t i = 0; i < Framebuffers.size(); ++i) {
 			const std::vector<VkImageView> Attachments = {
 				SwapchainImageViews[i],
+#ifdef USE_DEPTH_STENCIL
+				DepthStencilImageView,
+#endif
 			};
 			const VkFramebufferCreateInfo FramebufferCreateInfo = {
 				VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
@@ -867,7 +953,7 @@ namespace VK {
 			VK_FALSE,
 			VK_FALSE,
 			VK_POLYGON_MODE_FILL,
-			VK_CULL_MODE_NONE,
+			VK_CULL_MODE_BACK_BIT,
 			VK_FRONT_FACE_COUNTER_CLOCKWISE,
 			VK_FALSE, 0.0f, 0.0f, 0.0f,
 			1.0f
@@ -881,30 +967,32 @@ namespace VK {
 			nullptr,
 			VK_FALSE, VK_FALSE
 		};
+
+		const VkStencilOpState FrontStencilOpState = {
+			VK_STENCIL_OP_KEEP,
+			VK_STENCIL_OP_KEEP,
+			VK_STENCIL_OP_KEEP,
+			VK_COMPARE_OP_NEVER, 0, 0, 0
+		};
+		const VkStencilOpState BackStencilOpState = {
+			VK_STENCIL_OP_KEEP,
+			VK_STENCIL_OP_KEEP,
+			VK_STENCIL_OP_KEEP,
+			VK_COMPARE_OP_ALWAYS, 0, 0, 0
+		};
 		const VkPipelineDepthStencilStateCreateInfo PipelineDepthStencilStateCreateInfo = {
 			VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
 			nullptr,
 			0,
 			VK_TRUE,
+			VK_TRUE,
+			VK_COMPARE_OP_LESS_OR_EQUAL,
 			VK_FALSE,
-			VK_COMPARE_OP_ALWAYS,//VK_COMPARE_OP_LESS_OR_EQUAL,
 			VK_FALSE,
-			VK_FALSE,
-			{
-				VK_STENCIL_OP_KEEP,
-				VK_STENCIL_OP_KEEP,
-				VK_STENCIL_OP_KEEP,
-				VK_COMPARE_OP_NEVER, 0, 0, 0
-			},
-			{
-				VK_STENCIL_OP_KEEP,
-				VK_STENCIL_OP_KEEP,
-				VK_STENCIL_OP_KEEP,
-				VK_COMPARE_OP_ALWAYS, 0, 0, 0
-			},
+			FrontStencilOpState,
+			BackStencilOpState,
 			0.0f, 0.0f
 		};
-
 		const std::vector<VkPipelineColorBlendAttachmentState> VkPipelineColorBlendAttachmentStates = {
 			{
 				VK_FALSE,
@@ -912,7 +1000,7 @@ namespace VK {
 				VK_BLEND_OP_ADD,
 				VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ZERO,
 				VK_BLEND_OP_ADD,
-				0,
+				VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
 			}
 		};
 		const VkPipelineColorBlendStateCreateInfo PipelineColorBlendStateCreateInfo = {
@@ -1024,14 +1112,12 @@ namespace VK {
 		CreateFence();
 		CreateSemaphore();
 		CreateSwapchain(hInst, hWnd);
-		//CreateDepthStencil();
+		CreateDepthStencil();
 		CreateShader();
 		CreateDescriptorSet();
 		CreateVertexInput();
-
 		CreateVertexBuffer();
 		CreateIndexBuffer();
-
 		CreateRenderPass();
 		CreateFramebuffer();
 		CreateViewport();
@@ -1076,6 +1162,15 @@ namespace VK {
 		}
 		for (auto i : ShaderModules) {
 			vkDestroyShaderModule(Device, i, nullptr);
+		}
+		if (VK_NULL_HANDLE != DepthStencilImage) {
+			vkDestroyImage(Device, DepthStencilImage, nullptr);
+		}
+		if (VK_NULL_HANDLE != DepthStencilImageView) {
+			vkDestroyImageView(Device, DepthStencilImageView, nullptr);
+		}
+		if (VK_NULL_HANDLE != DepthStencilDeviceMemory) {
+			vkFreeMemory(Device, DepthStencilDeviceMemory, nullptr);
 		}
 		for (auto i : SwapchainImageViews) {
 			vkDestroyImageView(Device, i, nullptr);
@@ -1273,6 +1368,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		if (VK_ESCAPE == wParam) {
 			SendMessage(hWnd, WM_DESTROY, 0, 0);
 		}
+		break;
 	case WM_DESTROY:
 		VK::OnDestroy();
 		PostQuitMessage(0);
