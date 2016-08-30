@@ -203,6 +203,25 @@ namespace VK {
 		assert(false && "");
 		return 0xffffffff;
 	}
+	VkFormat GetSupportedDepthFormat(VkPhysicalDevice PhysicalDevice)
+	{
+		const std::vector<VkFormat> DepthFormats = {
+			VK_FORMAT_D32_SFLOAT_S8_UINT,
+			VK_FORMAT_D32_SFLOAT,
+			VK_FORMAT_D24_UNORM_S8_UINT,
+			VK_FORMAT_D16_UNORM_S8_UINT,
+			VK_FORMAT_D16_UNORM
+		};
+		for (auto& i : DepthFormats) {
+			VkFormatProperties FormatProperties;
+			vkGetPhysicalDeviceFormatProperties(PhysicalDevice, i, &FormatProperties);
+			if (FormatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+				return i;
+			}
+		}
+		assert(false && "DepthFormat not found");
+		return VK_FORMAT_UNDEFINED;
+	}
 
 	void ExecuteCommandBuffer()
 	{
@@ -582,6 +601,7 @@ namespace VK {
 	void CreateDepthStencil()
 	{
 #ifdef USE_DEPTH_STENCIL
+		DepthFormat = GetSupportedDepthFormat(PhysicalDevice);
 		const VkExtent3D Extent3D = { SurfaceExtent2D.width, SurfaceExtent2D.height, 1 };
 		const VkImageCreateInfo ImageCreateInfo = {
 			VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
@@ -723,7 +743,7 @@ namespace VK {
 		};
 #endif
 	}
-	void CreateBuffer(VkBuffer* Buffer, VkDeviceMemory* DeviceMemory, const void *Source, const VkDeviceSize Size)
+	void CreateBuffer(const VkBufferUsageFlagBits Usage, VkBuffer* Buffer, VkDeviceMemory* DeviceMemory, const void *Source, const VkDeviceSize Size)
 	{
 		//!< ステージングバッファの作成
 		const VkBufferCreateInfo StagingBufferCreateInfo = {
@@ -763,7 +783,7 @@ namespace VK {
 			nullptr,
 			0,
 			Size,
-			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			static_cast<VkBufferUsageFlags>(Usage) | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 			VK_SHARING_MODE_EXCLUSIVE,
 			0, nullptr
 		};
@@ -815,7 +835,7 @@ namespace VK {
 		const auto Stride = sizeof(Vertices[0]);
 		const auto Size = static_cast<VkDeviceSize>(Stride * Vertices.size());
 
-		CreateBuffer(&VertexBuffer, &VertexDeviceMemory, Vertices.data(), Size);
+		CreateBuffer(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &VertexBuffer, &VertexDeviceMemory, Vertices.data(), Size);
 #endif
 	}
 	void CreateIndexBuffer()
@@ -826,7 +846,7 @@ namespace VK {
 		IndexCount = static_cast<uint32_t>(Indices.size());
 		const auto Size = static_cast<VkDeviceSize>(sizeof(Indices[0]) * IndexCount);
 
-		CreateBuffer(&IndexBuffer, &IndexDeviceMemory, Indices.data(), Size);
+		CreateBuffer(VK_BUFFER_USAGE_INDEX_BUFFER_BIT, &IndexBuffer, &IndexDeviceMemory, Indices.data(), Size);
 #endif
 	}
 	void CreateViewport()
