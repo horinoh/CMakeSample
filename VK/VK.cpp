@@ -39,7 +39,6 @@
 
 namespace VK {
 	VkInstance Instance = VK_NULL_HANDLE;
-
 #ifdef _DEBUG
 	VkDebugReportCallbackEXT DebugReportCallback = VK_NULL_HANDLE;
 	PFN_vkCreateDebugReportCallbackEXT vkCreateDebugReportCallback;
@@ -67,7 +66,71 @@ namespace VK {
 
 	VkPhysicalDevice PhysicalDevice = VK_NULL_HANDLE;
 	VkPhysicalDeviceMemoryProperties PhysicalDeviceMemoryProperties;
-
+#ifdef _DEBUG
+	PFN_vkDebugMarkerSetObjectTagEXT vkDebugMarkerSetObjectTag = VK_NULL_HANDLE;
+	PFN_vkDebugMarkerSetObjectNameEXT vkDebugMarkerSetObjectName = VK_NULL_HANDLE;
+	PFN_vkCmdDebugMarkerBeginEXT vkCmdDebugMarkerBegin = VK_NULL_HANDLE;
+	PFN_vkCmdDebugMarkerEndEXT vkCmdDebugMarkerEnd = VK_NULL_HANDLE;
+	PFN_vkCmdDebugMarkerInsertEXT vkCmdDebugMarkerInsert = VK_NULL_HANDLE;
+	void SetObjectTag(VkDevice Device, VkDebugReportObjectTypeEXT DebugReportObjectType, uint64_t Object, const uint64_t TagName, const size_t TagSize, const void* Tag)
+	{
+		if (VK_NULL_HANDLE != vkDebugMarkerSetObjectTag) {
+			VkDebugMarkerObjectTagInfoEXT DebugMarkerObjectTagInfo = {
+				VK_STRUCTURE_TYPE_DEBUG_MARKER_OBJECT_TAG_INFO_EXT,
+				nullptr,
+				DebugReportObjectType,
+				Object,
+				TagName,
+				TagSize,
+				Tag
+			};
+			VERIFY_SUCCEEDED(vkDebugMarkerSetObjectTag(Device, &DebugMarkerObjectTagInfo));
+		}
+	}
+	void SetObjectName(VkDevice Device, VkDebugReportObjectTypeEXT DebugReportObjectType, uint64_t Object, const char* ObjectName)
+	{
+		if (VK_NULL_HANDLE != vkDebugMarkerSetObjectName) {
+			VkDebugMarkerObjectNameInfoEXT DebugMarkerObjectNameInfo = {
+				VK_STRUCTURE_TYPE_DEBUG_MARKER_OBJECT_NAME_INFO_EXT,
+				nullptr,
+				DebugReportObjectType,
+				Object,
+				ObjectName
+			};
+			VERIFY_SUCCEEDED(vkDebugMarkerSetObjectName(Device, &DebugMarkerObjectNameInfo));
+		}
+	}
+	void BeginMarkerRegion(VkCommandBuffer CommandBuffer, const char* MarkerName, glm::vec4 Color)
+	{
+		if (VK_NULL_HANDLE != vkCmdDebugMarkerBegin) {
+			VkDebugMarkerMarkerInfoEXT DebugMarkerMarkerInfo = {
+				VK_STRUCTURE_TYPE_DEBUG_MARKER_MARKER_INFO_EXT,
+				nullptr,
+				MarkerName,
+			};
+			memcpy(&DebugMarkerMarkerInfo.color, &Color, sizeof(DebugMarkerMarkerInfo.color));
+			vkCmdDebugMarkerBegin(CommandBuffer, &DebugMarkerMarkerInfo);
+		}
+	}
+	void EndMarkerRegion(VkCommandBuffer CommandBuffer)
+	{
+		if (VK_NULL_HANDLE != vkCmdDebugMarkerEnd) {
+			vkCmdDebugMarkerEnd(CommandBuffer);
+		}
+	}
+	void InsertMarker(VkCommandBuffer CommandBuffer, const char* MarkerName, glm::vec4 Color)
+	{
+		if (VK_NULL_HANDLE != vkCmdDebugMarkerInsert) {
+			VkDebugMarkerMarkerInfoEXT DebugMarkerMarkerInfo = {
+				VK_STRUCTURE_TYPE_DEBUG_MARKER_MARKER_INFO_EXT,
+				nullptr,
+				MarkerName,
+			};
+			memcpy(&DebugMarkerMarkerInfo.color, &Color, sizeof(DebugMarkerMarkerInfo.color));
+			vkCmdDebugMarkerInsert(CommandBuffer, &DebugMarkerMarkerInfo);
+		}
+	}
+#endif
 	uint32_t GraphicsQueueFamilyIndex;
 	VkDevice Device = VK_NULL_HANDLE;
 	VkQueue Queue = VK_NULL_HANDLE;
@@ -222,6 +285,29 @@ namespace VK {
 		assert(false && "DepthFormat not found");
 		return VK_FORMAT_UNDEFINED;
 	}
+	bool HasDebugMarker()
+	{
+		uint32_t LayerPropertyCount = 0;
+		vkEnumerateDeviceLayerProperties(PhysicalDevice, &LayerPropertyCount, nullptr);
+		if (LayerPropertyCount) {
+			std::vector<VkLayerProperties> LayerProperties(LayerPropertyCount);
+			vkEnumerateDeviceLayerProperties(PhysicalDevice, &LayerPropertyCount, LayerProperties.data());
+			for (const auto& i : LayerProperties) {
+				uint32_t ExtensionPropertyCount = 0;
+				vkEnumerateDeviceExtensionProperties(PhysicalDevice, i.layerName, &ExtensionPropertyCount, nullptr);
+				if (ExtensionPropertyCount) {
+					std::vector<VkExtensionProperties> ExtensionProperties(ExtensionPropertyCount);
+					vkEnumerateDeviceExtensionProperties(PhysicalDevice, i.layerName, &ExtensionPropertyCount, ExtensionProperties.data());
+					for (const auto& j : ExtensionProperties) {
+						if (!strcmp(j.extensionName, VK_EXT_DEBUG_MARKER_EXTENSION_NAME)) {
+							return true;
+						}
+					}
+				}
+			}
+		}
+		return false;
+	};
 
 	void ExecuteCommandBuffer()
 	{
@@ -364,10 +450,6 @@ namespace VK {
 						vkEnumerateInstanceExtensionProperties(j.layerName, &ExtensionPropertyCount, ExtensionProperties.data());
 						for (const auto& k : ExtensionProperties) {
 							std::cout << "\t" << "\t" << "\t" << "\"" << k.extensionName << "\"" << std::endl;
-
-							if (0 == strcmp(k.extensionName, VK_EXT_DEBUG_MARKER_EXTENSION_NAME)) {
-								std::cout << "\t" << "\t" << "\t" << "MARKER FOUND" << std::endl;
-							}
 						}
 					}
 				}
@@ -407,9 +489,13 @@ namespace VK {
 			"VK_LAYER_LUNARG_standard_validation",
 #endif
 		};
-		const std::vector<const char*> EnabledExtensions = {
+		std::vector<const char*> EnabledExtensions = {
 			VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 		};
+		//!< 可能ならマーカ拡張を有効
+		if (HasDebugMarker()) {
+			EnabledExtensions.push_back(VK_EXT_DEBUG_MARKER_EXTENSION_NAME);
+		}
 		const std::vector<float> QueuePriorities = {
 			0.0f
 		};
@@ -436,6 +522,16 @@ namespace VK {
 		//!< キューの取得
 		vkGetDeviceQueue(Device, GraphicsQueueFamilyIndex, 0, &Queue);
 	}
+#ifdef _DEBUG
+	void CreateDebugMarker()
+	{
+		vkDebugMarkerSetObjectTag = GET_DEVICE_PROC_ADDR(Device, DebugMarkerSetObjectTagEXT);
+		vkDebugMarkerSetObjectName = GET_DEVICE_PROC_ADDR(Device, DebugMarkerSetObjectNameEXT);
+		vkCmdDebugMarkerBegin = GET_DEVICE_PROC_ADDR(Device, CmdDebugMarkerBeginEXT);
+		vkCmdDebugMarkerEnd = GET_DEVICE_PROC_ADDR(Device, CmdDebugMarkerEndEXT);
+		vkCmdDebugMarkerInsert = GET_DEVICE_PROC_ADDR(Device, CmdDebugMarkerInsertEXT);
+	}
+#endif
 	void CreateCommandBuffer()
 	{
 		//!< コマンドプールの作成
@@ -836,6 +932,10 @@ namespace VK {
 		const auto Size = static_cast<VkDeviceSize>(Stride * Vertices.size());
 
 		CreateBuffer(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &VertexBuffer, &VertexDeviceMemory, Vertices.data(), Size);
+
+#ifdef _DEBUG
+		SetObjectName(Device, VK_DEBUG_REPORT_OBJECT_TYPE_BUFFER_EXT, reinterpret_cast<uint64_t>(VertexBuffer), "vertex buffer for triangle");
+#endif
 #endif
 	}
 	void CreateIndexBuffer()
@@ -847,6 +947,10 @@ namespace VK {
 		const auto Size = static_cast<VkDeviceSize>(sizeof(Indices[0]) * IndexCount);
 
 		CreateBuffer(VK_BUFFER_USAGE_INDEX_BUFFER_BIT, &IndexBuffer, &IndexDeviceMemory, Indices.data(), Size);
+
+#ifdef _DEBUG
+		SetObjectName(Device, VK_DEBUG_REPORT_OBJECT_TYPE_BUFFER_EXT, reinterpret_cast<uint64_t>(IndexBuffer), "index buffer for triangle");
+#endif
 #endif
 	}
 	void CreateViewport()
@@ -1076,7 +1180,11 @@ namespace VK {
 			0,
 			nullptr
 		};
+
 		VERIFY_SUCCEEDED(vkBeginCommandBuffer(CommandBuffer, &BeginInfo)); {
+#ifdef _DEBUG
+			BeginMarkerRegion(CommandBuffer, "begining of command buffer", glm::vec4(1, 0, 0, 1));
+#endif
 			vkCmdSetViewport(CommandBuffer, 0, 1, &Viewport);
 			vkCmdSetScissor(CommandBuffer, 0, 1, &ScissorRect);
 			SetImageLayout(CommandBuffer, SwapchainImages[SwapchainImageIndex], VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL); {
@@ -1099,10 +1207,16 @@ namespace VK {
 					vkCmdBindVertexBuffers(CommandBuffer, 0, 1, &VertexBuffer, &Offsets);
 					vkCmdBindIndexBuffer(CommandBuffer, IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
+#ifdef _DEBUG
+					InsertMarker(CommandBuffer, "draw polygon", glm::vec4(1, 1, 0, 1));
+#endif
 					vkCmdDrawIndexed(CommandBuffer, IndexCount, 1, 0, 0, 0);
 #endif
 				} vkCmdEndRenderPass(CommandBuffer);
 			} SetImageLayout(CommandBuffer, SwapchainImages[SwapchainImageIndex], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+#ifdef _DEBUG
+			EndMarkerRegion(CommandBuffer);
+#endif
 		} VERIFY_SUCCEEDED(vkEndCommandBuffer(CommandBuffer));
 	}
 	void Present()
@@ -1128,6 +1242,9 @@ namespace VK {
 #endif
 		GetPhysicalDevice();
 		CreateDevice();
+#ifdef _DEBUG
+		CreateDebugMarker();
+#endif
 		CreateCommandBuffer();
 		CreateFence();
 		CreateSemaphore();
