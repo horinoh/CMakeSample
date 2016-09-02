@@ -641,10 +641,10 @@ namespace VK {
 		//!< スワップチェインイメージビューの作成
 		SwapchainImageViews.resize(SwapchainImageCount);
 		const VkComponentMapping ComponentMapping = {
-			VK_COMPONENT_SWIZZLE_R,
-			VK_COMPONENT_SWIZZLE_G,
-			VK_COMPONENT_SWIZZLE_B,
-			VK_COMPONENT_SWIZZLE_A
+			VK_COMPONENT_SWIZZLE_IDENTITY,
+			VK_COMPONENT_SWIZZLE_IDENTITY,
+			VK_COMPONENT_SWIZZLE_IDENTITY,
+			VK_COMPONENT_SWIZZLE_IDENTITY
 		};
 		const VkCommandBufferInheritanceInfo CommandBufferInheritanceInfo = {
 			VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO,
@@ -682,10 +682,10 @@ namespace VK {
 				VERIFY_SUCCEEDED(vkCreateImageView(Device, &ImageViewCreateInfo, nullptr, &SwapchainImageViews[i]));
 
 				//!< 「使用前にメモリを塗りつぶせ」と怒られるので、初期カラーで塗りつぶす
-				SetImageLayout(CommandBuffer, SwapchainImages[i], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL); {
+				SetImageLayout(CommandBuffer, SwapchainImages[i], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL); {
 					const VkClearColorValue Green = { 0.0f, 1.0f, 0.0f, 1.0f };
-					vkCmdClearColorImage(CommandBuffer, SwapchainImages[i], VK_IMAGE_LAYOUT_GENERAL, &Green, 1, &ImageSubresourceRange);
-				} SetImageLayout(CommandBuffer, SwapchainImages[i], VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+					vkCmdClearColorImage(CommandBuffer, SwapchainImages[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &Green, 1, &ImageSubresourceRange);
+				} SetImageLayout(CommandBuffer, SwapchainImages[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 			}
 		} VERIFY_SUCCEEDED(vkEndCommandBuffer(CommandBuffer));
 
@@ -729,10 +729,10 @@ namespace VK {
 		VERIFY_SUCCEEDED(vkBindImageMemory(Device, DepthStencilImage, DepthStencilDeviceMemory, 0));
 
 		const VkComponentMapping ComponentMapping = {
-			VK_COMPONENT_SWIZZLE_R,
-			VK_COMPONENT_SWIZZLE_G,
-			VK_COMPONENT_SWIZZLE_B,
-			VK_COMPONENT_SWIZZLE_A
+			VK_COMPONENT_SWIZZLE_IDENTITY,
+			VK_COMPONENT_SWIZZLE_IDENTITY,
+			VK_COMPONENT_SWIZZLE_IDENTITY,
+			VK_COMPONENT_SWIZZLE_IDENTITY
 		};
 		const VkImageSubresourceRange ImageSubresourceRange = {
 			VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT,
@@ -1270,6 +1270,10 @@ namespace VK {
 	}
 	void OnDestroy()
 	{
+		if (VK_NULL_HANDLE != Device) {
+			VERIFY_SUCCEEDED(vkDeviceWaitIdle(Device));
+		}
+
 		if (VK_NULL_HANDLE != Pipeline) {
 			vkDestroyPipeline(Device, Pipeline, nullptr);
 		}
