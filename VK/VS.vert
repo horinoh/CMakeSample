@@ -5,6 +5,10 @@
 layout (location = 0) in vec3 InPosition;
 layout (location = 1) in vec4 InColor;
 
+out gl_PerVertex
+{
+	vec4 gl_Position;
+};
 layout (location = 0) out vec4 OutColor;
 
 void main()
