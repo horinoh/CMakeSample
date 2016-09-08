@@ -144,7 +144,7 @@ namespace VK {
 
 	VkFence Fence = VK_NULL_HANDLE;
 	VkSemaphore PresentSemaphore = VK_NULL_HANDLE;
-	//VkSemaphore XXXSemaphore = VK_NULL_HANDLE;
+	VkSemaphore RenderSemaphore = VK_NULL_HANDLE;
 
 	VkExtent2D SurfaceExtent2D;
 	VkFormat SurfaceFormat;
@@ -312,23 +312,6 @@ namespace VK {
 		}
 		return false;
 	};
-
-	void ExecuteCommandBuffer()
-	{
-		VERIFY_SUCCEEDED(vkDeviceWaitIdle(Device));
-
-		const VkPipelineStageFlags PipelineStageFlags = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-		const VkSubmitInfo SubmitInfo = {
-			VK_STRUCTURE_TYPE_SUBMIT_INFO,
-			nullptr,
-			0, nullptr,
-			&PipelineStageFlags,
-			1, &CommandBuffer,
-			0, nullptr
-		};
-		VERIFY_SUCCEEDED(vkQueueSubmit(GraphicsQueue, 1, &SubmitInfo, Fence));
-		VERIFY_SUCCEEDED(vkQueueWaitIdle(GraphicsQueue));
-	}
 	void WaitForFence()
 	{
 		VkResult Result;
@@ -627,7 +610,7 @@ namespace VK {
 			0
 		};
 		VERIFY_SUCCEEDED(vkCreateSemaphore(Device, &SemaphoreCreateInfo, nullptr, &PresentSemaphore));
-		//VERIFY_SUCCEEDED(vkCreateSemaphore(Device, &SemaphoreCreateInfo, nullptr, &XXXSemaphore));
+		VERIFY_SUCCEEDED(vkCreateSemaphore(Device, &SemaphoreCreateInfo, nullptr, &RenderSemaphore));
 	}
 	void CreateSwapchain()
 	{
@@ -635,14 +618,14 @@ namespace VK {
 		VERIFY_SUCCEEDED(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(PhysicalDevice, Surface, &SurfaceCapabilities));
 		//!< イメージサイズ (-1 の場合は選択可能)
 		if (-1 == SurfaceCapabilities.currentExtent.width) {
-			SurfaceExtent2D = { std::max(std::min<uint32_t>(1280, SurfaceCapabilities.maxImageExtent.width), SurfaceCapabilities.minImageExtent.width), std::max(std::min<uint32_t>(720, SurfaceCapabilities.maxImageExtent.height), SurfaceCapabilities.minImageExtent.height) };
+			SurfaceExtent2D = { (std::max)((std::min<uint32_t>)(1280, SurfaceCapabilities.maxImageExtent.width), SurfaceCapabilities.minImageExtent.width), (std::max)((std::min<uint32_t>)(720, SurfaceCapabilities.maxImageExtent.height), SurfaceCapabilities.minImageExtent.height) };
 		}
 		else {
 			SurfaceExtent2D = SurfaceCapabilities.currentExtent;
 		}
 
 		//!< イメージ枚数 (ここでは1枚多く取る ... MAILBOX の場合3枚あった方が良いので)
-		const uint32_t MinImageCount = std::min(SurfaceCapabilities.minImageCount + 1, SurfaceCapabilities.maxImageCount);
+		const uint32_t MinImageCount = (std::min)(SurfaceCapabilities.minImageCount + 1, SurfaceCapabilities.maxImageCount);
 
 		//!< イメージ使用法 (可能ならVK_IMAGE_USAGE_TRANSFER_DST_BIT をセットする。イメージクリア用)
 		const VkImageUsageFlags ImageUsageFlags = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | (VK_IMAGE_USAGE_TRANSFER_DST_BIT & SurfaceCapabilities.supportedUsageFlags);
@@ -716,6 +699,7 @@ namespace VK {
 		VERIFY_SUCCEEDED(vkGetSwapchainImagesKHR(Device, Swapchain, &SwapchainImageCount, nullptr));
 		SwapchainImages.resize(SwapchainImageCount);
 		VERIFY_SUCCEEDED(vkGetSwapchainImagesKHR(Device, Swapchain, &SwapchainImageCount, SwapchainImages.data()));
+		//!< スワップチェインイメージはプレゼント前迄に VK_IMAGE_LAYOUT_PRESENT_SRC_KHR にすること
 
 		//!< スワップチェインイメージビューの作成
 		SwapchainImageViews.resize(SwapchainImageCount);
@@ -760,18 +744,66 @@ namespace VK {
 				};
 				VERIFY_SUCCEEDED(vkCreateImageView(Device, &ImageViewCreateInfo, nullptr, &SwapchainImageViews[i]));
 
-				//!< 「使用前にメモリを塗りつぶせ」と怒られるので、初期カラーで塗りつぶす
-				SetImageLayout(CommandBuffer, SwapchainImages[i], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL); {
+				//!< イメージをカラーで初期化、イメージレイアウトの変更
+				const VkImageMemoryBarrier ImageMemoryBarrier_PresentToTransfer = {
+					VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+					nullptr,
+					0,   
+					VK_ACCESS_TRANSFER_WRITE_BIT,
+					VK_IMAGE_LAYOUT_UNDEFINED, //!<「現在のレイアウト」or「UNDEFINED」を指定すること、イメージコンテンツを保持したい場合は「UNDEFINED」はダメ
+					VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+					PresentQueueFamilyIndex,
+					PresentQueueFamilyIndex,
+					SwapchainImages[i],
+					ImageSubresourceRange
+				};
+				const VkImageMemoryBarrier ImageMemoryBarrier_TransferToPresent = {
+					VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+					nullptr,
+					VK_ACCESS_TRANSFER_WRITE_BIT,
+					VK_ACCESS_MEMORY_READ_BIT,
+					VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+					VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+					PresentQueueFamilyIndex,
+					PresentQueueFamilyIndex,
+					SwapchainImages[i],
+					ImageSubresourceRange
+				};
+				vkCmdPipelineBarrier(CommandBuffer, 
+					VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+					0,
+					0, nullptr, 
+					0, nullptr,
+					1, &ImageMemoryBarrier_PresentToTransfer); {
+					
+					//!< 初期カラーで塗りつぶす
 					const VkClearColorValue Green = { 0.0f, 1.0f, 0.0f, 1.0f };
 					vkCmdClearColorImage(CommandBuffer, SwapchainImages[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &Green, 1, &ImageSubresourceRange);
-				} SetImageLayout(CommandBuffer, SwapchainImages[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+				
+				} vkCmdPipelineBarrier(CommandBuffer, 
+					VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 
+					0,
+					0, nullptr, 
+					0, nullptr, 
+					1, &ImageMemoryBarrier_TransferToPresent);
 			}
 		} VERIFY_SUCCEEDED(vkEndCommandBuffer(CommandBuffer));
 
-		ExecuteCommandBuffer();
+		VERIFY_SUCCEEDED(vkDeviceWaitIdle(Device));
+		const VkPipelineStageFlags PipelineStageFlags = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+		const VkSubmitInfo SubmitInfo = {
+			VK_STRUCTURE_TYPE_SUBMIT_INFO,
+			nullptr,
+			0, nullptr, &PipelineStageFlags,
+			1, &CommandBuffer,
+			0, nullptr
+		};
+		VERIFY_SUCCEEDED(vkQueueSubmit(GraphicsQueue, 1, &SubmitInfo, Fence));
+		VERIFY_SUCCEEDED(vkQueueWaitIdle(GraphicsQueue));
+
 		WaitForFence();
 
-		VERIFY_SUCCEEDED(vkAcquireNextImageKHR(Device, Swapchain, UINT64_MAX, PresentSemaphore, nullptr, &SwapchainImageIndex));
+		VERIFY_SUCCEEDED(vkAcquireNextImageKHR(Device, Swapchain, UINT64_MAX, PresentSemaphore, VK_NULL_HANDLE, &SwapchainImageIndex));
 	}
 	void CreateDepthStencil()
 	{
@@ -918,7 +950,7 @@ namespace VK {
 		};
 #endif
 	}
-	void CreateBuffer(const VkBufferUsageFlagBits Usage, const VkAccessFlags AccessFlag, const VkPipelineStageFlagBits PipelineStageFlag, VkBuffer* Buffer, VkDeviceMemory* DeviceMemory, const void *Source, const VkDeviceSize Size)
+	void CreateBuffer(const VkBufferUsageFlagBits Usage, const VkAccessFlags AccessFlag, const VkPipelineStageFlags PipelineStageFlag, VkBuffer* Buffer, VkDeviceMemory* DeviceMemory, const void *Source, const VkDeviceSize Size)
 	{
 		//!< ステージングバッファの作成
 		const VkBufferCreateInfo StagingBufferCreateInfo = {
@@ -1311,7 +1343,7 @@ namespace VK {
 		const VkCommandBufferBeginInfo BeginInfo = {
 			VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
 			nullptr,
-			0,
+			VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT,
 			nullptr
 		};
 
@@ -1358,14 +1390,13 @@ namespace VK {
 		const VkPresentInfoKHR PresentInfo = {
 			VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
 			nullptr,
-			1, &PresentSemaphore,
-			1, &Swapchain,
-			&SwapchainImageIndex,
+			1, &RenderSemaphore,
+			1, &Swapchain, &SwapchainImageIndex,
 			nullptr
 		};
 		VERIFY_SUCCEEDED(vkQueuePresentKHR(GraphicsQueue, &PresentInfo));
 
-		VERIFY_SUCCEEDED(vkAcquireNextImageKHR(Device, Swapchain, UINT64_MAX, PresentSemaphore, nullptr, &SwapchainImageIndex));
+		VERIFY_SUCCEEDED(vkAcquireNextImageKHR(Device, Swapchain, UINT64_MAX, PresentSemaphore, VK_NULL_HANDLE, &SwapchainImageIndex));
 	}
 
 	void OnCreate(HINSTANCE hInst, HWND hWnd)
@@ -1395,10 +1426,28 @@ namespace VK {
 		CreateViewport();
 		CreatePipeline();
 	}
+	void OnSize(HINSTANCE hInst, HWND hWnd)
+	{
+		if (VK_NULL_HANDLE != Device) {
+			VERIFY_SUCCEEDED(vkDeviceWaitIdle(Device));
+		}
+	}
 	void OnPaint(HWND hWhd)
 	{
 		PopulateCommandBuffer();
-		ExecuteCommandBuffer();
+
+		VERIFY_SUCCEEDED(vkDeviceWaitIdle(Device));
+		const VkPipelineStageFlags PipelineStageFlags = VK_PIPELINE_STAGE_TRANSFER_BIT; //VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+		const VkSubmitInfo SubmitInfo = {
+			VK_STRUCTURE_TYPE_SUBMIT_INFO,
+			nullptr,
+			1, &PresentSemaphore, &PipelineStageFlags,
+			1, &CommandBuffer,
+			1, &RenderSemaphore
+		};
+		VERIFY_SUCCEEDED(vkQueueSubmit(GraphicsQueue, 1, &SubmitInfo, Fence));
+		VERIFY_SUCCEEDED(vkQueueWaitIdle(GraphicsQueue));
+
 		WaitForFence();
 
 		Present();
@@ -1454,9 +1503,9 @@ namespace VK {
 		if (VK_NULL_HANDLE != Swapchain) {
 			vkDestroySwapchainKHR(Device, Swapchain, nullptr);
 		}
-		//if (VK_NULL_HANDLE != XXXSemaphore) {
-		//	vkDestroySemaphore(Device, XXXSemaphore, nullptr);
-		//}
+		if (VK_NULL_HANDLE != RenderSemaphore) {
+			vkDestroySemaphore(Device, RenderSemaphore, nullptr);
+		}
 		if (VK_NULL_HANDLE != PresentSemaphore) {
 			vkDestroySemaphore(Device, PresentSemaphore, nullptr);
 		}
@@ -1633,6 +1682,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	case WM_CREATE:
 		VK::OnCreate(hInst, hWnd);
 		SetTimer(hWnd, NULL, 1000 / 60, nullptr);
+		break;
+	case WM_SIZE:
+		VK::OnSize(hInst, hWnd);
 		break;
 	case WM_TIMER:
 		SendMessage(hWnd, WM_PAINT, 0, 0);
