@@ -191,72 +191,6 @@ namespace VK {
 		}
 	};
 
-	static VkAccessFlags GetSrcAccessMask(VkImageLayout Old, VkImageLayout New)
-	{
-		VkAccessFlags SrcAccessMask = 0;
-		switch (Old) {
-		case VK_IMAGE_LAYOUT_UNDEFINED: break;
-		case VK_IMAGE_LAYOUT_PREINITIALIZED: SrcAccessMask = VK_ACCESS_HOST_WRITE_BIT; break;
-		case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: SrcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT; break;
-		case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL: SrcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT; break;
-		case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL: SrcAccessMask = VK_ACCESS_TRANSFER_READ_BIT; break;
-		case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: SrcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; break;
-		case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: SrcAccessMask = VK_ACCESS_SHADER_READ_BIT; break;
-		}
-		switch (New)
-		{
-		case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL: SrcAccessMask |= VK_ACCESS_TRANSFER_READ_BIT; break;
-		case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: SrcAccessMask = VK_ACCESS_TRANSFER_READ_BIT; break;
-		case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-			if (0 == SrcAccessMask) {
-				SrcAccessMask = VK_ACCESS_HOST_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-			}
-			break;
-		}
-		return SrcAccessMask;
-	}
-	static VkAccessFlags GetDstAccessMask(VkImageLayout New)
-	{
-		switch (New)
-		{
-		case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: return VK_ACCESS_TRANSFER_WRITE_BIT;
-		case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL: return VK_ACCESS_TRANSFER_READ_BIT;
-		case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: return VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-		case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL: return VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-		case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: return VK_ACCESS_SHADER_READ_BIT;
-		}
-		return 0;
-	}
-	void SetImageLayout(VkCommandBuffer CommandBuffer, VkImage Image, VkImageLayout Old, VkImageLayout New)
-	{
-		const auto SrcAccessMask = GetSrcAccessMask(Old, New);
-		const auto DstAccessMask = GetDstAccessMask(New);
-
-		const VkImageSubresourceRange ImageSubresourceRange = {
-			VK_IMAGE_ASPECT_COLOR_BIT,
-			0, 1,
-			0, 1,
-		};
-		const VkImageMemoryBarrier ImageMemoryBarrier = {
-			VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-			nullptr,
-			SrcAccessMask,
-			DstAccessMask,
-			Old,
-			New,
-			VK_QUEUE_FAMILY_IGNORED,
-			VK_QUEUE_FAMILY_IGNORED,
-			Image,
-			ImageSubresourceRange
-		};
-		vkCmdPipelineBarrier(CommandBuffer,
-			VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-			VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-			0,
-			0, nullptr,
-			0, nullptr,
-			1, &ImageMemoryBarrier);
-	}
 	uint32_t GetMemoryTypeIndex(uint32_t MemoryTypeBits, VkMemoryPropertyFlags MemoryPropertyFlags)
 	{
 		for (uint32_t i = 0; i < PhysicalDeviceMemoryProperties.memoryTypeCount; i++) {
@@ -748,7 +682,7 @@ namespace VK {
 				const VkImageMemoryBarrier ImageMemoryBarrier_PresentToTransfer = {
 					VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
 					nullptr,
-					0,   
+					0,
 					VK_ACCESS_TRANSFER_WRITE_BIT,
 					VK_IMAGE_LAYOUT_UNDEFINED, //!<「現在のレイアウト」or「UNDEFINED」を指定すること、イメージコンテンツを保持したい場合は「UNDEFINED」はダメ
 					VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -769,22 +703,22 @@ namespace VK {
 					SwapchainImages[i],
 					ImageSubresourceRange
 				};
-				vkCmdPipelineBarrier(CommandBuffer, 
+				vkCmdPipelineBarrier(CommandBuffer,
 					VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
 					0,
-					0, nullptr, 
+					0, nullptr,
 					0, nullptr,
 					1, &ImageMemoryBarrier_PresentToTransfer); {
-					
+
 					//!< 初期カラーで塗りつぶす
 					const VkClearColorValue Green = { 0.0f, 1.0f, 0.0f, 1.0f };
 					vkCmdClearColorImage(CommandBuffer, SwapchainImages[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &Green, 1, &ImageSubresourceRange);
-				
-				} vkCmdPipelineBarrier(CommandBuffer, 
-					VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 
+
+				} vkCmdPipelineBarrier(CommandBuffer,
+					VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
 					0,
-					0, nullptr, 
-					0, nullptr, 
+					0, nullptr,
+					0, nullptr,
 					1, &ImageMemoryBarrier_TransferToPresent);
 			}
 		} VERIFY_SUCCEEDED(vkEndCommandBuffer(CommandBuffer));
@@ -1118,12 +1052,12 @@ namespace VK {
 				0,
 				SurfaceFormat,
 				VK_SAMPLE_COUNT_1_BIT,
-				VK_ATTACHMENT_LOAD_OP_CLEAR,
-				VK_ATTACHMENT_STORE_OP_STORE,
-				VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+				VK_ATTACHMENT_LOAD_OP_CLEAR, //!< レンダーパスの開始時にクリアを行う
+				VK_ATTACHMENT_STORE_OP_STORE, //!< レンダーパス終了時に保存する(表示するのに必要)
+				VK_ATTACHMENT_LOAD_OP_DONT_CARE, //!< (ステンシルは)カラーアタッチメントの場合は関係ない
 				VK_ATTACHMENT_STORE_OP_DONT_CARE,
-				VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-				VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+				VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,//!< レンダーパス開始時のレイアウト (メモリバリアなしにサブパス間でレイアウトが変更される)
+				VK_IMAGE_LAYOUT_PRESENT_SRC_KHR//!< レンダーパス終了時のレイアウト
 			},
 #ifdef USE_DEPTH_STENCIL
 			{
@@ -1140,15 +1074,11 @@ namespace VK {
 #endif
 		};
 		const std::vector<VkAttachmentReference> ColorAttachmentReferences = {
-			{
-				0,
-				VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-			}
+			{ 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL },
 		};
 #ifdef USE_DEPTH_STENCIL
 		const VkAttachmentReference DepthAttachmentReferences = {
-			1,
-			VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+			1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
 		};
 #endif
 		const std::vector<VkSubpassDescription> SubpassDescriptions = {
@@ -1156,14 +1086,13 @@ namespace VK {
 				0,
 				VK_PIPELINE_BIND_POINT_GRAPHICS,
 				0, nullptr,
-				static_cast<uint32_t>(ColorAttachmentReferences.size()), ColorAttachmentReferences.data(),
-				nullptr,
+				static_cast<uint32_t>(ColorAttachmentReferences.size()), ColorAttachmentReferences.data(), nullptr,
 #ifdef USE_DEPTH_STENCIL
 				&DepthAttachmentReferences,
 #else
 				nullptr,
 #endif
-				0, nullptr
+				0, nullptr //!< このサブパスでは使用しないが、後のサブパスで使用する場合に指定しなくてはならない
 			}
 		};
 		const std::vector<VkSubpassDependency> SubpassDependencies = {
@@ -1353,33 +1282,31 @@ namespace VK {
 #endif
 			vkCmdSetViewport(CommandBuffer, 0, 1, &Viewport);
 			vkCmdSetScissor(CommandBuffer, 0, 1, &ScissorRect);
-			SetImageLayout(CommandBuffer, SwapchainImages[SwapchainImageIndex], VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL); {
-				const VkRenderPassBeginInfo RenderPassBeginInfo = {
-					VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-					nullptr,
-					RenderPass,
-					Framebuffers[SwapchainImageIndex],
-					{
-						0, 0,
-						SurfaceExtent2D.width, SurfaceExtent2D.height
-					},
-					static_cast<uint32_t>(ClearValues.size()), ClearValues.data()
-				};
-				vkCmdBeginRenderPass(CommandBuffer, &RenderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE); {
+			const VkRenderPassBeginInfo RenderPassBeginInfo = {
+				VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+				nullptr,
+				RenderPass,
+				Framebuffers[SwapchainImageIndex],
+				{
+					0, 0,
+					SurfaceExtent2D.width, SurfaceExtent2D.height
+				},
+				static_cast<uint32_t>(ClearValues.size()), ClearValues.data()
+			};
+			vkCmdBeginRenderPass(CommandBuffer, &RenderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE); {
 #ifdef DRAW_PLOYGON
-					vkCmdBindPipeline(CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, Pipeline);
+				vkCmdBindPipeline(CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, Pipeline);
 
-					VkDeviceSize Offsets = 0;
-					vkCmdBindVertexBuffers(CommandBuffer, 0, 1, &VertexBuffer, &Offsets);
-					vkCmdBindIndexBuffer(CommandBuffer, IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				VkDeviceSize Offsets = 0;
+				vkCmdBindVertexBuffers(CommandBuffer, 0, 1, &VertexBuffer, &Offsets);
+				vkCmdBindIndexBuffer(CommandBuffer, IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
 #ifdef _DEBUG
-					InsertMarker(CommandBuffer, "draw polygon", glm::vec4(1, 1, 0, 1));
+				InsertMarker(CommandBuffer, "draw polygon", glm::vec4(1, 1, 0, 1));
 #endif
-					vkCmdDrawIndexed(CommandBuffer, IndexCount, 1, 0, 0, 0);
+				vkCmdDrawIndexed(CommandBuffer, IndexCount, 1, 0, 0, 0);
 #endif
-				} vkCmdEndRenderPass(CommandBuffer);
-			} SetImageLayout(CommandBuffer, SwapchainImages[SwapchainImageIndex], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+			} vkCmdEndRenderPass(CommandBuffer);
 #ifdef _DEBUG
 			EndMarkerRegion(CommandBuffer);
 #endif
