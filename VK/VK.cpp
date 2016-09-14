@@ -158,16 +158,7 @@ namespace VK {
 	VkDeviceMemory DepthStencilDeviceMemory = VK_NULL_HANDLE;
 	VkImageView DepthStencilImageView = VK_NULL_HANDLE;
 
-	std::vector<VkShaderModule> ShaderModules;
-	std::vector<VkPipelineShaderStageCreateInfo> PipelineShaderStageCreateInfos;
-
-	std::vector<VkDescriptorSetLayout> DescriptorSetLayouts;
-	VkPipelineLayout PipelineLayout = VK_NULL_HANDLE;
-
 	using Vertex = struct Vertex { glm::vec3 Positon; glm::vec4 Color; };
-	std::vector<VkVertexInputBindingDescription> VertexInputBindingDescriptions;
-	std::vector<VkVertexInputAttributeDescription> VertexInputAttributeDescriptions;
-	VkPipelineVertexInputStateCreateInfo PipelineVertexInputStateCreateInfo;
 
 	VkBuffer VertexBuffer = VK_NULL_HANDLE;
 	VkDeviceMemory VertexDeviceMemory = VK_NULL_HANDLE;
@@ -825,65 +816,6 @@ namespace VK {
 		assert(VK_NULL_HANDLE != ShaderModule);
 		return ShaderModule;
 	}
-	void CreateShader()
-	{
-#ifdef DRAW_PLOYGON
-		ShaderModules.push_back(CreateShaderModule(SHADER_PATH L"VS.vert.spv"));
-		ShaderModules.push_back(CreateShaderModule(SHADER_PATH L"FS.frag.spv"));
-
-		PipelineShaderStageCreateInfos = {
-			{
-				VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-				nullptr,
-				0,
-				VK_SHADER_STAGE_VERTEX_BIT, ShaderModules[0],
-				"main",
-				nullptr
-			},
-			{
-				VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-				nullptr,
-				0,
-				VK_SHADER_STAGE_FRAGMENT_BIT, ShaderModules[1],
-				"main",
-				nullptr
-			}
-		};
-#endif
-	}
-	void CreateDescriptorSet()
-	{
-#ifdef DRAW_PLOYGON
-		const VkPipelineLayoutCreateInfo PipelineLayoutCreateInfo = {
-			VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-			nullptr,
-			0,
-			static_cast<uint32_t>(DescriptorSetLayouts.size()), DescriptorSetLayouts.data(),
-			0, nullptr
-		};
-		VERIFY_SUCCEEDED(vkCreatePipelineLayout(Device, &PipelineLayoutCreateInfo, nullptr, &PipelineLayout));
-#endif
-	}
-	void CreateVertexInput()
-	{
-#ifdef DRAW_PLOYGON
-		Vertex Vertices;
-		VertexInputBindingDescriptions = {
-			{ 0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX }
-		};
-		VertexInputAttributeDescriptions = {
-			{ 0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0 },
-			{ 1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12 }
-		};
-		PipelineVertexInputStateCreateInfo = {
-			VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-			nullptr,
-			0,
-			static_cast<uint32_t>(VertexInputBindingDescriptions.size()), VertexInputBindingDescriptions.data(),
-			static_cast<uint32_t>(VertexInputAttributeDescriptions.size()), VertexInputAttributeDescriptions.data()
-		};
-#endif
-	}
 	void CreateBuffer(const VkBufferUsageFlagBits Usage, const VkAccessFlags AccessFlag, const VkPipelineStageFlags PipelineStageFlag, VkBuffer* Buffer, VkDeviceMemory* DeviceMemory, const void *Source, const VkDeviceSize Size)
 	{
 		//!< ステージングバッファの作成
@@ -1150,6 +1082,44 @@ namespace VK {
 	void CreatePipeline()
 	{
 #ifdef DRAW_PLOYGON
+		const std::vector<VkShaderModule> ShaderModules = {
+			CreateShaderModule(SHADER_PATH L"VS.vert.spv"),
+			CreateShaderModule(SHADER_PATH L"FS.frag.spv")
+		};
+		const std::vector<VkPipelineShaderStageCreateInfo> PipelineShaderStageCreateInfos = {
+			{
+				VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+				nullptr,
+				0,
+				VK_SHADER_STAGE_VERTEX_BIT, ShaderModules[0],
+				"main",
+				nullptr
+			},
+			{
+				VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+				nullptr,
+				0,
+				VK_SHADER_STAGE_FRAGMENT_BIT, ShaderModules[1],
+				"main",
+				nullptr
+			}
+		};
+
+		const std::vector<VkVertexInputBindingDescription> VertexInputBindingDescriptions = {
+			{ 0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX }
+		};
+		const std::vector<VkVertexInputAttributeDescription> VertexInputAttributeDescriptions = {
+			{ 0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0 },
+			{ 1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12 }
+		};
+		const VkPipelineVertexInputStateCreateInfo PipelineVertexInputStateCreateInfo = {
+			VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+			nullptr,
+			0,
+			static_cast<uint32_t>(VertexInputBindingDescriptions.size()), VertexInputBindingDescriptions.data(),
+			static_cast<uint32_t>(VertexInputAttributeDescriptions.size()), VertexInputAttributeDescriptions.data()
+		};
+
 		const VkPipelineInputAssemblyStateCreateInfo PipelineInputAssemblyStateCreateInfo = {
 			VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
 			nullptr,
@@ -1157,7 +1127,7 @@ namespace VK {
 			VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
 			VK_FALSE
 		};
-		//!< DynamicState にする場合は nullptr を指定できる、ただし個数は 0 にできないので注意!
+		//!< DynamicState にする場合は nullptr を指定できる、ただし個数は 0 にできないので注意! コマンドで動的にセットすること
 		const VkPipelineViewportStateCreateInfo PipelineViewportStateCreateInfo = {
 			VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
 			nullptr,
@@ -1212,7 +1182,8 @@ namespace VK {
 			BackStencilOpState,
 			0.0f, 0.0f
 		};
-		const std::vector<VkPipelineColorBlendAttachmentState> VkPipelineColorBlendAttachmentStates = {
+		//!< アタッチメント毎に異なるブレンドをしたい場合はデバイスで有効になっていないとだめ (VkPhysicalDeviceFeatures.independentBlend)
+		const std::vector<VkPipelineColorBlendAttachmentState> PipelineColorBlendAttachmentStates = {
 			{
 				VK_FALSE,
 				VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ZERO,
@@ -1227,7 +1198,7 @@ namespace VK {
 			nullptr,
 			0,
 			VK_FALSE, VK_LOGIC_OP_CLEAR,
-			static_cast<uint32_t>(VkPipelineColorBlendAttachmentStates.size()), VkPipelineColorBlendAttachmentStates.data(),
+			static_cast<uint32_t>(PipelineColorBlendAttachmentStates.size()), PipelineColorBlendAttachmentStates.data(),
 			{ 0.0f, 0.0f, 0.0f, 0.0f }
 		};
 		const std::vector<VkDynamicState> DynamicStates = {
@@ -1240,6 +1211,28 @@ namespace VK {
 			0,
 			static_cast<uint32_t>(DynamicStates.size()), DynamicStates.data()
 		};
+
+		VkPipelineLayout PipelineLayout = VK_NULL_HANDLE;
+		const std::vector<VkDescriptorSetLayout> DescriptorSetLayouts = {
+		};
+		const VkPipelineLayoutCreateInfo PipelineLayoutCreateInfo = {
+			VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+			nullptr,
+			0,
+			static_cast<uint32_t>(DescriptorSetLayouts.size()), DescriptorSetLayouts.data(),
+			0, nullptr
+		};
+		VERIFY_SUCCEEDED(vkCreatePipelineLayout(Device, &PipelineLayoutCreateInfo, nullptr, &PipelineLayout));
+		for (auto i : DescriptorSetLayouts) {
+			vkDestroyDescriptorSetLayout(Device, i, nullptr);
+		}
+		/**
+		@note
+		basePipelineHandle と basePipelineIndex は同時に使用できない(排他)
+		親には VK_PIPELINE_CREATE_ALLOW_DERIVATIVES_BIT フラグが必要
+		・basePipelineHandle ... 既に存在する場合、親パイプラインを指定
+		・basePipelineIndex ... GraphicsPipelineCreateInfos 配列で親パイプラインも同時に作成する場合、配列内での親パイプラインの添字。親の添字の方が若い値でないといけない。
+		*/
 		const std::vector<VkGraphicsPipelineCreateInfo> GraphicsPipelineCreateInfos = {
 			{
 				VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
@@ -1258,10 +1251,19 @@ namespace VK {
 				PipelineLayout,
 				RenderPass,
 				0,
-				VK_NULL_HANDLE, 0
+				VK_NULL_HANDLE, //!< VkPipeline basePipelineHandle;
+				0				//!< int32_t basePipelineIndex;
 			}
 		};
 		VERIFY_SUCCEEDED(vkCreateGraphicsPipelines(Device, nullptr, static_cast<uint32_t>(GraphicsPipelineCreateInfos.size()), GraphicsPipelineCreateInfos.data(), nullptr, &Pipeline));
+
+		for (auto i : ShaderModules) {
+			vkDestroyShaderModule(Device, i, nullptr);
+		}
+		if (VK_NULL_HANDLE != PipelineLayout) {
+			vkDestroyPipelineLayout(Device, PipelineLayout, nullptr);
+			PipelineLayout = VK_NULL_HANDLE;
+		}
 #endif
 	}
 
@@ -1272,7 +1274,11 @@ namespace VK {
 		const VkCommandBufferBeginInfo BeginInfo = {
 			VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
 			nullptr,
-			VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT,
+#if 1
+			VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+#else
+			VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT, //!< 前回のサブミットが完了していなくても、再度サブミットされ得る
+#endif
 			nullptr
 		};
 
@@ -1343,9 +1349,6 @@ namespace VK {
 		CreateSemaphore();
 		CreateSwapchain();
 		CreateDepthStencil();
-		CreateShader();
-		CreateDescriptorSet();
-		CreateVertexInput();
 		CreateVertexBuffer();
 		CreateIndexBuffer();
 		CreateRenderPass();
@@ -1387,77 +1390,89 @@ namespace VK {
 
 		if (VK_NULL_HANDLE != Pipeline) {
 			vkDestroyPipeline(Device, Pipeline, nullptr);
+			Pipeline = VK_NULL_HANDLE;
 		}
 		for (auto i : Framebuffers) {
 			vkDestroyFramebuffer(Device, i, nullptr);
 		}
+		Framebuffers.clear();
 		if (VK_NULL_HANDLE != RenderPass) {
 			vkDestroyRenderPass(Device, RenderPass, nullptr);
+			RenderPass = VK_NULL_HANDLE;
 		}
 		if (VK_NULL_HANDLE != IndexDeviceMemory) {
 			vkFreeMemory(Device, IndexDeviceMemory, nullptr);
+			IndexDeviceMemory = VK_NULL_HANDLE;
 		}
 		if (VK_NULL_HANDLE != IndexBuffer) {
 			vkDestroyBuffer(Device, IndexBuffer, nullptr);
+			IndexBuffer = VK_NULL_HANDLE;
 		}
 		if (VK_NULL_HANDLE != VertexDeviceMemory) {
 			vkFreeMemory(Device, VertexDeviceMemory, nullptr);
+			VertexDeviceMemory = VK_NULL_HANDLE;
 		}
 		if (VK_NULL_HANDLE != VertexBuffer) {
 			vkDestroyBuffer(Device, VertexBuffer, nullptr);
-		}
-		if (VK_NULL_HANDLE != PipelineLayout) {
-			vkDestroyPipelineLayout(Device, PipelineLayout, nullptr);
-		}
-		for (auto i : DescriptorSetLayouts) {
-			vkDestroyDescriptorSetLayout(Device, i, nullptr);
-		}
-		for (auto i : ShaderModules) {
-			vkDestroyShaderModule(Device, i, nullptr);
+			VertexBuffer = VK_NULL_HANDLE;
 		}
 		if (VK_NULL_HANDLE != DepthStencilImage) {
 			vkDestroyImage(Device, DepthStencilImage, nullptr);
+			DepthStencilImage = VK_NULL_HANDLE;
 		}
 		if (VK_NULL_HANDLE != DepthStencilImageView) {
 			vkDestroyImageView(Device, DepthStencilImageView, nullptr);
+			DepthStencilImageView = VK_NULL_HANDLE;
 		}
 		if (VK_NULL_HANDLE != DepthStencilDeviceMemory) {
 			vkFreeMemory(Device, DepthStencilDeviceMemory, nullptr);
+			DepthStencilDeviceMemory = VK_NULL_HANDLE;
 		}
 		for (auto i : SwapchainImageViews) {
 			vkDestroyImageView(Device, i, nullptr);
 		}
+		SwapchainImageViews.clear();
 		if (VK_NULL_HANDLE != Swapchain) {
 			vkDestroySwapchainKHR(Device, Swapchain, nullptr);
+			Swapchain = VK_NULL_HANDLE;
 		}
 		if (VK_NULL_HANDLE != RenderSemaphore) {
 			vkDestroySemaphore(Device, RenderSemaphore, nullptr);
+			RenderSemaphore = VK_NULL_HANDLE;
 		}
 		if (VK_NULL_HANDLE != PresentSemaphore) {
 			vkDestroySemaphore(Device, PresentSemaphore, nullptr);
+			RenderSemaphore = VK_NULL_HANDLE;
 		}
 		if (VK_NULL_HANDLE != Fence) {
 			vkDestroyFence(Device, Fence, nullptr);
+			Fence = VK_NULL_HANDLE;
 		}
 		if (VK_NULL_HANDLE != CommandBuffer) {
 			vkFreeCommandBuffers(Device, CommandPool, 1, &CommandBuffer);
+			CommandBuffer = VK_NULL_HANDLE;
 		}
 		if (VK_NULL_HANDLE != CommandPool) {
 			vkDestroyCommandPool(Device, CommandPool, nullptr);
+			CommandPool = VK_NULL_HANDLE;
 		}
 		if (VK_NULL_HANDLE != Device) {
 			vkDestroyDevice(Device, nullptr);
+			Device = VK_NULL_HANDLE;
 		}
 #ifdef _DEBUG
 		if (VK_NULL_HANDLE != vkDestoryDebugReportCallback) {
 			vkDestoryDebugReportCallback(Instance, DebugReportCallback, nullptr);
+			vkDestoryDebugReportCallback = VK_NULL_HANDLE;
 		}
 #endif
 		if (VK_NULL_HANDLE != Surface) {
 			vkDestroySurfaceKHR(Instance, Surface, nullptr);
+			Surface = VK_NULL_HANDLE;
 		}
 		if (VK_NULL_HANDLE != Instance) {
 			vkDestroyInstance(Instance, nullptr);
+			Instance = VK_NULL_HANDLE;
 		}
 	}
 };
