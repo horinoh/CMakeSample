@@ -143,8 +143,8 @@ namespace VK {
 	VkCommandBuffer CommandBuffer = VK_NULL_HANDLE;
 
 	VkFence Fence = VK_NULL_HANDLE;
-	VkSemaphore PresentSemaphore = VK_NULL_HANDLE;
-	VkSemaphore RenderSemaphore = VK_NULL_HANDLE;
+	VkSemaphore NextImageAcquiredSemaphore = VK_NULL_HANDLE;	//!< 次イメージ取得完了(プレゼント完了)セマフォ (描画が可能になった) 
+	VkSemaphore RenderFinishedSemaphore = VK_NULL_HANDLE;		//!< 描画完了セマフォ (プレゼントが可能になった)
 
 	VkExtent2D SurfaceExtent2D;
 	VkFormat SurfaceFormat;
@@ -158,7 +158,7 @@ namespace VK {
 	VkDeviceMemory DepthStencilDeviceMemory = VK_NULL_HANDLE;
 	VkImageView DepthStencilImageView = VK_NULL_HANDLE;
 
-	using Vertex = struct Vertex { glm::vec3 Positon; glm::vec4 Color; };
+	using Vertex = struct Vertex { glm::vec3 Position; glm::vec4 Color; };
 
 	VkBuffer VertexBuffer = VK_NULL_HANDLE;
 	VkDeviceMemory VertexDeviceMemory = VK_NULL_HANDLE;
@@ -503,7 +503,7 @@ namespace VK {
 		const VkCommandPoolCreateInfo CommandPoolInfo = {
 			VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
 			nullptr,
-			VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+			VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT | VK_COMMAND_POOL_CREATE_TRANSIENT_BIT, //!< VK_COMMAND_POOL_CREATE_TRANSIENT_BIT 短期間にリセットや解放される場合に指定する
 			GraphicsQueueFamilyIndex
 		};
 		VERIFY_SUCCEEDED(vkCreateCommandPool(Device, &CommandPoolInfo, nullptr, &CommandPool));
@@ -523,7 +523,7 @@ namespace VK {
 		const VkFenceCreateInfo FenceCreateInfo = {
 			VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
 			nullptr,
-			0
+			VK_FENCE_CREATE_SIGNALED_BIT //!< 初回と２回目以降を同じに扱う為に、シグナル済みで作成
 		};
 		VERIFY_SUCCEEDED(vkCreateFence(Device, &FenceCreateInfo, nullptr, &Fence));
 	}
@@ -534,8 +534,8 @@ namespace VK {
 			nullptr,
 			0
 		};
-		VERIFY_SUCCEEDED(vkCreateSemaphore(Device, &SemaphoreCreateInfo, nullptr, &PresentSemaphore));
-		VERIFY_SUCCEEDED(vkCreateSemaphore(Device, &SemaphoreCreateInfo, nullptr, &RenderSemaphore));
+		VERIFY_SUCCEEDED(vkCreateSemaphore(Device, &SemaphoreCreateInfo, nullptr, &NextImageAcquiredSemaphore));
+		VERIFY_SUCCEEDED(vkCreateSemaphore(Device, &SemaphoreCreateInfo, nullptr, &RenderFinishedSemaphore));
 	}
 	void CreateSwapchain()
 	{
@@ -728,7 +728,8 @@ namespace VK {
 
 		WaitForFence();
 
-		VERIFY_SUCCEEDED(vkAcquireNextImageKHR(Device, Swapchain, UINT64_MAX, PresentSemaphore, VK_NULL_HANDLE, &SwapchainImageIndex));
+		//!< 次のイメージが取得できたらセマフォが通知される
+		VERIFY_SUCCEEDED(vkAcquireNextImageKHR(Device, Swapchain, UINT64_MAX, NextImageAcquiredSemaphore, VK_NULL_HANDLE, &SwapchainImageIndex));
 	}
 	void CreateDepthStencil()
 	{
@@ -816,6 +817,9 @@ namespace VK {
 		assert(VK_NULL_HANDLE != ShaderModule);
 		return ShaderModule;
 	}
+	/**
+	#TODO 本当は、まとまったサイズで vkAllocateMemory() 確保し、vkBindBufferMemory(..., Offset) のオフセットにより複数のバッファを管理したほうが効率が良い
+	*/
 	void CreateBuffer(const VkBufferUsageFlagBits Usage, const VkAccessFlags AccessFlag, const VkPipelineStageFlags PipelineStageFlag, VkBuffer* Buffer, VkDeviceMemory* DeviceMemory, const void *Source, const VkDeviceSize Size)
 	{
 		//!< ステージングバッファの作成
@@ -857,7 +861,7 @@ namespace VK {
 			};
 			VERIFY_SUCCEEDED(vkFlushMappedMemoryRanges(Device, 1, &MappedMemoryRange));
 
-		} vkUnmapMemory(Device, StagingDeviceMemory);
+		} vkUnmapMemory(Device, StagingDeviceMemory); //!< vkUnmapMemory() はしなくても良い(パフォーマンスへの影響も無い)
 
 		VERIFY_SUCCEEDED(vkBindBufferMemory(Device, StagingBuffer, StagingDeviceMemory, 0));
 
@@ -989,7 +993,7 @@ namespace VK {
 				VK_ATTACHMENT_LOAD_OP_DONT_CARE, //!< (ステンシルは)カラーアタッチメントの場合は関係ない
 				VK_ATTACHMENT_STORE_OP_DONT_CARE,
 				VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,//!< レンダーパス開始時のレイアウト (メモリバリアなしにサブパス間でレイアウトが変更される)
-				VK_IMAGE_LAYOUT_PRESENT_SRC_KHR//!< レンダーパス終了時のレイアウト
+				VK_IMAGE_LAYOUT_PRESENT_SRC_KHR //!< レンダーパス終了時のレイアウト
 			},
 #ifdef USE_DEPTH_STENCIL
 			{
@@ -1027,19 +1031,23 @@ namespace VK {
 				0, nullptr //!< このサブパスでは使用しないが、後のサブパスで使用する場合に指定しなくてはならない
 			}
 		};
+		//!< イメージバリアより効率が良い
 		const std::vector<VkSubpassDependency> SubpassDependencies = {
 			{
-				VK_SUBPASS_EXTERNAL, //!< レンダーパス外
-				0,
-				VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-				VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-				VK_ACCESS_MEMORY_READ_BIT,
-				VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-				VK_DEPENDENCY_BY_REGION_BIT,
+				//!< サブパス
+				VK_SUBPASS_EXTERNAL,							//!< サブパス外から
+				0,												//!< サブパス0へ
+																//!< ステージ
+																VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,			//!< パイプラインの最後
+																VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,	//!< カラー出力
+																												//!< アクセス
+																												VK_ACCESS_MEMORY_READ_BIT,						//!< リード
+																												VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,			//!< ライト
+																												VK_DEPENDENCY_BY_REGION_BIT,
 			},
 			{
 				0,
-				VK_SUBPASS_EXTERNAL, //!< レンダーパス外
+				VK_SUBPASS_EXTERNAL,
 				VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
 				VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
 				VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
@@ -1079,14 +1087,13 @@ namespace VK {
 			VERIFY_SUCCEEDED(vkCreateFramebuffer(Device, &FramebufferCreateInfo, nullptr, &Framebuffers[i]));
 		}
 	}
-	void CreatePipeline()
+	void CreateShader(std::vector<VkShaderModule>& ShaderModules, std::vector<VkPipelineShaderStageCreateInfo>& PipelineShaderStageCreateInfos)
 	{
-#ifdef DRAW_PLOYGON
-		const std::vector<VkShaderModule> ShaderModules = {
+		ShaderModules = {
 			CreateShaderModule(SHADER_PATH L"VS.vert.spv"),
 			CreateShaderModule(SHADER_PATH L"FS.frag.spv")
 		};
-		const std::vector<VkPipelineShaderStageCreateInfo> PipelineShaderStageCreateInfos = {
+		PipelineShaderStageCreateInfos = {
 			{
 				VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
 				nullptr,
@@ -1104,14 +1111,31 @@ namespace VK {
 				nullptr
 			}
 		};
+	}
+	template<typename T>
+	void CreateVertexInput(std::vector<VkVertexInputBindingDescription>& VertexInputBindingDescriptions, std::vector<VkVertexInputAttributeDescription>& VertexInputAttributeDescriptions, const uint32_t Binding = 0) {}
+	template<>
+	void CreateVertexInput<Vertex>(std::vector<VkVertexInputBindingDescription>& VertexInputBindingDescriptions, std::vector<VkVertexInputAttributeDescription>& VertexInputAttributeDescriptions, const uint32_t Binding)
+	{
+		VertexInputBindingDescriptions = {
+			{ Binding, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX }
+		};
+		VertexInputAttributeDescriptions = {
+			{ 0, Binding, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, Position) },
+			{ 1, Binding, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, Color) }
+		};
+	}
+	template<typename T>
+	void CreatePipeline()
+	{
+#ifdef DRAW_PLOYGON
+		std::vector<VkShaderModule> ShaderModules;
+		std::vector<VkPipelineShaderStageCreateInfo> PipelineShaderStageCreateInfos;
+		CreateShader(ShaderModules, PipelineShaderStageCreateInfos);
 
-		const std::vector<VkVertexInputBindingDescription> VertexInputBindingDescriptions = {
-			{ 0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX }
-		};
-		const std::vector<VkVertexInputAttributeDescription> VertexInputAttributeDescriptions = {
-			{ 0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0 },
-			{ 1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12 }
-		};
+		std::vector<VkVertexInputBindingDescription> VertexInputBindingDescriptions;
+		std::vector<VkVertexInputAttributeDescription> VertexInputAttributeDescriptions;
+		CreateVertexInput<T>(VertexInputBindingDescriptions, VertexInputAttributeDescriptions);
 		const VkPipelineVertexInputStateCreateInfo PipelineVertexInputStateCreateInfo = {
 			VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
 			nullptr,
@@ -1127,7 +1151,8 @@ namespace VK {
 			VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
 			VK_FALSE
 		};
-		//!< DynamicState にする場合は nullptr を指定できる、ただし個数は 0 にできないので注意! コマンドで動的にセットすること
+
+		//!< DynamicState にする場合は nullptr を指定できる、ただし個数は 0 にできないので注意。DynamicStateにした項目はコマンドから必ずセットすること
 		const VkPipelineViewportStateCreateInfo PipelineViewportStateCreateInfo = {
 			VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
 			nullptr,
@@ -1135,6 +1160,7 @@ namespace VK {
 			1, nullptr,
 			1, nullptr
 		};
+
 		const VkPipelineRasterizationStateCreateInfo PipelineRasterizationStateCreateInfo = {
 			VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
 			nullptr,
@@ -1147,6 +1173,7 @@ namespace VK {
 			VK_FALSE, 0.0f, 0.0f, 0.0f,
 			1.0f
 		};
+
 		const VkPipelineMultisampleStateCreateInfo PipelineMultisampleStateCreateInfo = {
 			VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
 			nullptr,
@@ -1182,6 +1209,7 @@ namespace VK {
 			BackStencilOpState,
 			0.0f, 0.0f
 		};
+
 		//!< アタッチメント毎に異なるブレンドをしたい場合はデバイスで有効になっていないとだめ (VkPhysicalDeviceFeatures.independentBlend)
 		const std::vector<VkPipelineColorBlendAttachmentState> PipelineColorBlendAttachmentStates = {
 			{
@@ -1201,6 +1229,7 @@ namespace VK {
 			static_cast<uint32_t>(PipelineColorBlendAttachmentStates.size()), PipelineColorBlendAttachmentStates.data(),
 			{ 0.0f, 0.0f, 0.0f, 0.0f }
 		};
+
 		const std::vector<VkDynamicState> DynamicStates = {
 			VK_DYNAMIC_STATE_VIEWPORT,
 			VK_DYNAMIC_STATE_SCISSOR
@@ -1212,20 +1241,24 @@ namespace VK {
 			static_cast<uint32_t>(DynamicStates.size()), DynamicStates.data()
 		};
 
-		VkPipelineLayout PipelineLayout = VK_NULL_HANDLE;
-		const std::vector<VkDescriptorSetLayout> DescriptorSetLayouts = {
-		};
+		//const VkDescriptorSetLayoutCreateInfo DescriptorSetLayoutCreateInfo = {
+		//};
+		//VkDescriptorSetLayout DescriptorSetLayout = VK_NULL_HANDLE;
+		//VERIFY_SUCCEEDED(vkCreateDescriptorSetLayout(Device, &DescriptorSetLayoutCreateInfo, nullptr, &DescriptorSetLayout));
 		const VkPipelineLayoutCreateInfo PipelineLayoutCreateInfo = {
 			VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
 			nullptr,
 			0,
-			static_cast<uint32_t>(DescriptorSetLayouts.size()), DescriptorSetLayouts.data(),
+			0, nullptr, //1, &DescriptorSetLayout,
 			0, nullptr
 		};
+		VkPipelineLayout PipelineLayout = VK_NULL_HANDLE;
 		VERIFY_SUCCEEDED(vkCreatePipelineLayout(Device, &PipelineLayoutCreateInfo, nullptr, &PipelineLayout));
-		for (auto i : DescriptorSetLayouts) {
-			vkDestroyDescriptorSetLayout(Device, i, nullptr);
-		}
+		//if (VK_NULL_HANDLE != DescriptorSetLayout) {
+		//	vkDestroyDescriptorSetLayout(Device, DescriptorSetLayout, nullptr);
+		//	DescriptorSetLayout = VK_NULL_HANDLE;
+		//}
+
 		/**
 		@note
 		basePipelineHandle と basePipelineIndex は同時に使用できない(排他)
@@ -1323,13 +1356,14 @@ namespace VK {
 		const VkPresentInfoKHR PresentInfo = {
 			VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
 			nullptr,
-			1, &RenderSemaphore,
+			1, &RenderFinishedSemaphore,	//!< 描画が完了するまで待つ
 			1, &Swapchain, &SwapchainImageIndex,
 			nullptr
 		};
 		VERIFY_SUCCEEDED(vkQueuePresentKHR(GraphicsQueue, &PresentInfo));
 
-		VERIFY_SUCCEEDED(vkAcquireNextImageKHR(Device, Swapchain, UINT64_MAX, PresentSemaphore, VK_NULL_HANDLE, &SwapchainImageIndex));
+		//!< 次のイメージが取得できたらセマフォが通知される
+		VERIFY_SUCCEEDED(vkAcquireNextImageKHR(Device, Swapchain, UINT64_MAX, NextImageAcquiredSemaphore, VK_NULL_HANDLE, &SwapchainImageIndex));
 	}
 
 	void OnCreate(HINSTANCE hInst, HWND hWnd)
@@ -1354,7 +1388,7 @@ namespace VK {
 		CreateRenderPass();
 		CreateFramebuffer();
 		CreateViewport();
-		CreatePipeline();
+		CreatePipeline<Vertex>();
 	}
 	void OnSize(HINSTANCE hInst, HWND hWnd)
 	{
@@ -1371,9 +1405,9 @@ namespace VK {
 		const VkSubmitInfo SubmitInfo = {
 			VK_STRUCTURE_TYPE_SUBMIT_INFO,
 			nullptr,
-			1, &PresentSemaphore, &PipelineStageFlags,
+			1, &NextImageAcquiredSemaphore, &PipelineStageFlags,	//!< 次イメージが取得できる(プレゼント完了)までウエイト
 			1, &CommandBuffer,
-			1, &RenderSemaphore
+			1, &RenderFinishedSemaphore								//!< 描画完了を通知する
 		};
 		VERIFY_SUCCEEDED(vkQueueSubmit(GraphicsQueue, 1, &SubmitInfo, Fence));
 		VERIFY_SUCCEEDED(vkQueueWaitIdle(GraphicsQueue));
@@ -1436,13 +1470,13 @@ namespace VK {
 			vkDestroySwapchainKHR(Device, Swapchain, nullptr);
 			Swapchain = VK_NULL_HANDLE;
 		}
-		if (VK_NULL_HANDLE != RenderSemaphore) {
-			vkDestroySemaphore(Device, RenderSemaphore, nullptr);
-			RenderSemaphore = VK_NULL_HANDLE;
+		if (VK_NULL_HANDLE != RenderFinishedSemaphore) {
+			vkDestroySemaphore(Device, RenderFinishedSemaphore, nullptr);
+			RenderFinishedSemaphore = VK_NULL_HANDLE;
 		}
-		if (VK_NULL_HANDLE != PresentSemaphore) {
-			vkDestroySemaphore(Device, PresentSemaphore, nullptr);
-			RenderSemaphore = VK_NULL_HANDLE;
+		if (VK_NULL_HANDLE != NextImageAcquiredSemaphore) {
+			vkDestroySemaphore(Device, NextImageAcquiredSemaphore, nullptr);
+			RenderFinishedSemaphore = VK_NULL_HANDLE;
 		}
 		if (VK_NULL_HANDLE != Fence) {
 			vkDestroyFence(Device, Fence, nullptr);
