@@ -28,6 +28,13 @@ if(GLI_FOUND)
     include_directories(${GLI_INCLUDE_DIRS})
 endif()
 
+# Windows ビルド用に予め用意したファイル
+# ReadMe.txt
+# Resource.h
+# small.ico
+# stdafx.cpp, stdafx.h
+# targetver.h
+# VK.ico, VK.rc
 file(GLOB_RECURSE SourceFiles ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
 file(GLOB_RECURSE HeaderFiles ${CMAKE_CURRENT_SOURCE_DIR}/*.h)
 file(GLOB_RECURSE ResourceFiles ${CMAKE_CURRENT_SOURCE_DIR}/*.rc)
