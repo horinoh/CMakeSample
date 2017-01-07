@@ -17,7 +17,7 @@
 #include <glm/glm.hpp>
 
 #ifndef VERIFY_SUCCEEDED
-#define VERIFY_SUCCEEDED(vr) if (VK_SUCCESS != (vr)) { assert(false); }
+#define VERIFY_SUCCEEDED(vr) if (VK_SUCCESS != (vr)) { DebugBreak(); }
 #endif
 
 #ifndef GET_INSTANCE_PROC_ADDR
@@ -28,14 +28,10 @@
 #endif
 
 #ifndef SHADER_PATH
-#ifdef _DEBUG
 #define SHADER_PATH L".\\"
-#else
-#define SHADER_PATH L".\\"
-#endif
 #endif
 
-#define DRAW_PLOYGON
+#define DRAW_POLYGON
 #define USE_DEPTH_STENCIL
 
 namespace VK {
@@ -48,15 +44,18 @@ namespace VK {
 	auto DebugReport = [](VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location, int32_t messageCode, const char* pLayerPrefix, const char* pMessage, void* pUserData) -> VkBool32
 	{
 		if (VK_DEBUG_REPORT_ERROR_BIT_EXT & flags) {
+			DebugBreak();
 			std::cout << pMessage << std::endl;
 		}
 		else if (VK_DEBUG_REPORT_WARNING_BIT_EXT & flags) {
+			DebugBreak();
 			std::cout << pMessage << std::endl;
 		}
 		else if (VK_DEBUG_REPORT_INFORMATION_BIT_EXT & flags) {
 			//std::cout << pMessage << std::endl;
 		}
 		else if (VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT & flags) {
+			DebugBreak();
 			std::cout << pMessage << std::endl;
 		}
 		else if (VK_DEBUG_REPORT_DEBUG_BIT_EXT & flags) {
@@ -64,7 +63,7 @@ namespace VK {
 		}
 		return false; //!< エラー時は基本 fakse を返してアボート
 	};
-#endif
+#endif //!< _DEBUG
 
 	VkPhysicalDevice PhysicalDevice = VK_NULL_HANDLE;
 	VkPhysicalDeviceMemoryProperties PhysicalDeviceMemoryProperties;
@@ -99,7 +98,8 @@ namespace VK {
 				Object,
 				ObjectName
 			};
-			VERIFY_SUCCEEDED(vkDebugMarkerSetObjectName(Device, &DebugMarkerObjectNameInfo));
+			//!< #MY_TODO 通らなくなった…
+			//VERIFY_SUCCEEDED(vkDebugMarkerSetObjectName(Device, &DebugMarkerObjectNameInfo));
 		}
 	}
 	void BeginMarkerRegion(VkCommandBuffer CommandBuffer, const char* MarkerName, glm::vec4 Color)
@@ -132,7 +132,8 @@ namespace VK {
 			vkCmdDebugMarkerInsert(CommandBuffer, &DebugMarkerMarkerInfo);
 		}
 	}
-#endif
+#endif //!< _DEBUG
+
 	uint32_t GraphicsQueueFamilyIndex = UINT32_MAX;
 	uint32_t PresentQueueFamilyIndex = UINT32_MAX;
 	VkDevice Device = VK_NULL_HANDLE;
@@ -178,7 +179,9 @@ namespace VK {
 	const std::vector<VkClearValue> ClearValues = {
 		{
 			{ SkyBlue },
+#ifdef USE_DEPTH_STENCIL
 			{ 1.0f, 0 }
+#endif
 		}
 	};
 
@@ -192,7 +195,7 @@ namespace VK {
 			}
 			MemoryTypeBits >>= 1;
 		}
-		assert(false && "");
+		assert(false && "MemoryTypeIndex not found");
 		return 0xffffffff;
 	}
 	VkFormat GetSupportedDepthFormat(VkPhysicalDevice PhysicalDevice)
@@ -248,9 +251,157 @@ namespace VK {
 
 		VERIFY_SUCCEEDED(vkResetFences(Device, 1, &Fence));
 	}
+	/**
+	#MY_TODO 本当は、まとまったサイズで vkAllocateMemory() 確保し、vkBindBufferMemory(..., Offset) のオフセットにより複数のバッファを管理したほうが効率が良い
+	*/
+	void CreateBuffer(const VkBufferUsageFlagBits Usage, const VkAccessFlags AccessFlag, const VkPipelineStageFlags PipelineStageFlag, VkBuffer* Buffer, VkDeviceMemory* DeviceMemory, const void *Source, const VkDeviceSize Size)
+	{
+		//!< ステージングバッファの作成
+		const VkBufferCreateInfo StagingBufferCreateInfo = {
+			VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+			nullptr,
+			0,
+			Size,
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_SHARING_MODE_EXCLUSIVE,
+			0, nullptr
+		};
+		VkBuffer StagingBuffer = VK_NULL_HANDLE;
+		VERIFY_SUCCEEDED(vkCreateBuffer(Device, &StagingBufferCreateInfo, nullptr, &StagingBuffer));
+
+		VkMemoryRequirements StagingMemoryRequirements;
+		vkGetBufferMemoryRequirements(Device, StagingBuffer, &StagingMemoryRequirements);
+
+		const VkMemoryAllocateInfo StagingMemoryAllocateInfo = {
+			VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+			nullptr,
+			StagingMemoryRequirements.size,
+			GetMemoryTypeIndex(StagingMemoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+		};
+		VkDeviceMemory StagingDeviceMemory = VK_NULL_HANDLE;
+		VERIFY_SUCCEEDED(vkAllocateMemory(Device, &StagingMemoryAllocateInfo, nullptr, &StagingDeviceMemory));
+
+		void* Data;
+		VERIFY_SUCCEEDED(vkMapMemory(Device, StagingDeviceMemory, 0, StagingMemoryAllocateInfo.allocationSize, 0, &Data)); {
+			memcpy(Data, Source, Size);
+
+			//!< VK_MEMORY_PROPERTY_HOST_COHERENT_BIT でない場合に必要
+			const VkMappedMemoryRange MappedMemoryRange = {
+				VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
+				nullptr,
+				StagingDeviceMemory,
+				0,
+				VK_WHOLE_SIZE
+			};
+			VERIFY_SUCCEEDED(vkFlushMappedMemoryRanges(Device, 1, &MappedMemoryRange));
+
+		} vkUnmapMemory(Device, StagingDeviceMemory); //!< vkUnmapMemory() はしなくても良い(パフォーマンスへの影響も無い)
+
+		VERIFY_SUCCEEDED(vkBindBufferMemory(Device, StagingBuffer, StagingDeviceMemory, 0));
+
+		//!< デバイスローカルバッファの作成
+		const VkBufferCreateInfo BufferCreateInfo = {
+			VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+			nullptr,
+			0,
+			Size,
+			static_cast<VkBufferUsageFlags>(Usage) | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			VK_SHARING_MODE_EXCLUSIVE,
+			0, nullptr
+		};
+		VERIFY_SUCCEEDED(vkCreateBuffer(Device, &BufferCreateInfo, nullptr, Buffer));
+
+		VkMemoryRequirements MemoryRequirements;
+		vkGetBufferMemoryRequirements(Device, *Buffer, &MemoryRequirements);
+
+		const VkMemoryAllocateInfo MemoryAllocateInfo = {
+			VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+			nullptr,
+			MemoryRequirements.size,
+			GetMemoryTypeIndex(MemoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+		};
+		VERIFY_SUCCEEDED(vkAllocateMemory(Device, &MemoryAllocateInfo, nullptr, DeviceMemory));
+
+		VERIFY_SUCCEEDED(vkBindBufferMemory(Device, *Buffer, *DeviceMemory, 0));
+
+		//!< ステージングバッファ → デバイスローカルバッファ コマンド発行
+		const VkCommandBufferBeginInfo BeginInfo = {
+			VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+			nullptr,
+			0,
+			nullptr
+		};
+		VERIFY_SUCCEEDED(vkBeginCommandBuffer(CommandBuffer, &BeginInfo)); {
+			const VkBufferCopy BufferCopy = {
+				0,
+				0,
+				Size
+			};
+			vkCmdCopyBuffer(CommandBuffer, StagingBuffer, *Buffer, 1, &BufferCopy);
+
+			//!< バッファを「転送先として」から「目的のバッファとして」へ変更する
+			const VkBufferMemoryBarrier BufferMemoryBarrier = {
+				VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+				nullptr,
+				VK_ACCESS_MEMORY_WRITE_BIT,
+				AccessFlag,
+				VK_QUEUE_FAMILY_IGNORED,
+				VK_QUEUE_FAMILY_IGNORED,
+				*Buffer,
+				0,
+				VK_WHOLE_SIZE
+			};
+			vkCmdPipelineBarrier(CommandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, PipelineStageFlag, 0, 0, nullptr, 1, &BufferMemoryBarrier, 0, nullptr);
+
+		} VERIFY_SUCCEEDED(vkEndCommandBuffer(CommandBuffer));
+
+		//!< サブミット
+		const VkSubmitInfo SubmitInfo = {
+			VK_STRUCTURE_TYPE_SUBMIT_INFO,
+			nullptr,
+			0, nullptr,
+			nullptr,
+			1, &CommandBuffer,
+			0, nullptr
+		};
+		VERIFY_SUCCEEDED(vkQueueSubmit(GraphicsQueue, 1, &SubmitInfo, VK_NULL_HANDLE));
+		VERIFY_SUCCEEDED(vkDeviceWaitIdle(Device)); //!< フェンスでも良いがここでは vkDeviceWaitIdle() で待つ
+
+		vkDestroyBuffer(Device, StagingBuffer, nullptr);
+		vkFreeMemory(Device, StagingDeviceMemory, nullptr);
+	}
+	VkShaderModule CreateShaderModule(const std::wstring& Path)
+	{
+		VkShaderModule ShaderModule = VK_NULL_HANDLE;
+
+		std::ifstream In(Path.c_str(), std::ios::in | std::ios::binary);
+		assert(false == In.fail());
+
+		In.seekg(0, std::ios_base::end);
+		const auto CodeSize = In.tellg();
+		In.seekg(0, std::ios_base::beg);
+
+		auto Code = new char[CodeSize];
+		In.read(Code, CodeSize);
+		In.close();
+
+		const VkShaderModuleCreateInfo ModuleCreateInfo = {
+			VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+			nullptr,
+			0,
+			CodeSize, reinterpret_cast<uint32_t*>(Code)
+		};
+		VERIFY_SUCCEEDED(vkCreateShaderModule(Device, &ModuleCreateInfo, nullptr, &ShaderModule));
+
+		delete[] Code;
+
+		assert(VK_NULL_HANDLE != ShaderModule);
+		return ShaderModule;
+	}
 
 	void CreateInstance()
 	{
+#ifdef _DEBUG
 		//!< インスタンスのレイヤ、エクステンションの列挙
 		uint32_t LayerPropertyCount = 0;
 		vkEnumerateInstanceLayerProperties(&LayerPropertyCount, nullptr);
@@ -272,13 +423,21 @@ namespace VK {
 
 			}
 		}
+#endif //!< _DEBUG
+
 		//!< インスタンスの作成
 		const VkApplicationInfo ApplicationInfo = {
 			VK_STRUCTURE_TYPE_APPLICATION_INFO,
 			nullptr,
-			"VKDX App", 0,
-			"VKDX Engine", 0,
+			"VK App", 0,
+			"VK Engine", 0,
 			VK_API_VERSION_1_0
+		};
+		const std::vector<const char*> EnabledLayerNames = {
+#ifdef _DEBUG
+			"VK_LAYER_LUNARG_standard_validation",
+			"VK_LAYER_LUNARG_object_tracker",
+#endif
 		};
 		const std::vector<const char*> EnabledExtensions = {
 			VK_KHR_SURFACE_EXTENSION_NAME,
@@ -287,11 +446,6 @@ namespace VK {
 #endif
 #ifdef _DEBUG
 			VK_EXT_DEBUG_REPORT_EXTENSION_NAME,
-#endif
-		};
-		const std::vector<const char*> EnabledLayerNames = {
-#ifdef _DEBUG
-			"VK_LAYER_LUNARG_standard_validation",
 #endif
 		};
 		const VkInstanceCreateInfo InstanceCreateInfo = {
@@ -339,7 +493,7 @@ namespace VK {
 		};
 		VERIFY_SUCCEEDED(vkCreateDebugReportCallback(Instance, &DebugReportCallbackCreateInfo, nullptr, &DebugReportCallback));
 	}
-#endif
+#endif //!< _DEBUG
 	void GetPhysicalDevice()
 	{
 		//!< 物理デバイスの列挙
@@ -348,6 +502,7 @@ namespace VK {
 		assert(PhysicalDeviceCount && "PhysicalDevice not found");
 		std::vector<VkPhysicalDevice> PhysicalDevices(PhysicalDeviceCount);
 		vkEnumeratePhysicalDevices(Instance, &PhysicalDeviceCount, PhysicalDevices.data());
+#ifdef _DEBUG
 		for (const auto& i : PhysicalDevices) {
 			//!< デバイスプロパティ
 			VkPhysicalDeviceProperties PhysicalDeviceProperties;
@@ -378,8 +533,9 @@ namespace VK {
 				}
 			}
 		}
+#endif //!< _DEBUG
 
-		//!< ここでは物理デバイスを選択 #TODO
+		//!< ここでは最初の物理デバイスを選択
 		PhysicalDevice = PhysicalDevices[0];
 		//!< デバイスメモリプロパティ	
 		vkGetPhysicalDeviceMemoryProperties(PhysicalDevice, &PhysicalDeviceMemoryProperties);
@@ -438,6 +594,7 @@ namespace VK {
 		const std::vector<const char*> EnabledLayerNames = {
 #ifdef _DEBUG
 			"VK_LAYER_LUNARG_standard_validation",
+			"VK_LAYER_LUNARG_object_tracker",
 #endif
 		};
 		std::vector<const char*> EnabledExtensions = {
@@ -463,14 +620,13 @@ namespace VK {
 		//!< グラフィックとプレゼントのキューインデックスが別の場合は追加で必要
 		if (GraphicsQueueFamilyIndex != PresentQueueFamilyIndex) {
 			QueueCreateInfos.push_back(
-			{
-				VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-				nullptr,
-				0,
-				PresentQueueFamilyIndex,
-				static_cast<uint32_t>(QueuePriorities.size()), QueuePriorities.data()
-			}
-			);
+				{
+					VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+					nullptr,
+					0,
+					PresentQueueFamilyIndex,
+					static_cast<uint32_t>(QueuePriorities.size()), QueuePriorities.data()
+				});
 		}
 		const VkDeviceCreateInfo DeviceCreateInfo = {
 			VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
@@ -787,162 +943,15 @@ namespace VK {
 			ImageSubresourceRange
 		};
 		VERIFY_SUCCEEDED(vkCreateImageView(Device, &ImageViewCreateInfo, nullptr, &DepthStencilImageView));
-#endif
-	}
-	VkShaderModule CreateShaderModule(const std::wstring& Path)
-	{
-		VkShaderModule ShaderModule = VK_NULL_HANDLE;
-
-		std::ifstream In(Path.c_str(), std::ios::in | std::ios::binary);
-		assert(false == In.fail());
-
-		In.seekg(0, std::ios_base::end);
-		const auto CodeSize = In.tellg();
-		In.seekg(0, std::ios_base::beg);
-
-		auto Code = new char[CodeSize];
-		In.read(Code, CodeSize);
-		In.close();
-
-		const VkShaderModuleCreateInfo ModuleCreateInfo = {
-			VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-			nullptr,
-			0,
-			CodeSize, reinterpret_cast<uint32_t*>(Code)
-		};
-		VERIFY_SUCCEEDED(vkCreateShaderModule(Device, &ModuleCreateInfo, nullptr, &ShaderModule));
-
-		delete[] Code;
-
-		assert(VK_NULL_HANDLE != ShaderModule);
-		return ShaderModule;
-	}
-	/**
-	#TODO 本当は、まとまったサイズで vkAllocateMemory() 確保し、vkBindBufferMemory(..., Offset) のオフセットにより複数のバッファを管理したほうが効率が良い
-	*/
-	void CreateBuffer(const VkBufferUsageFlagBits Usage, const VkAccessFlags AccessFlag, const VkPipelineStageFlags PipelineStageFlag, VkBuffer* Buffer, VkDeviceMemory* DeviceMemory, const void *Source, const VkDeviceSize Size)
-	{
-		//!< ステージングバッファの作成
-		const VkBufferCreateInfo StagingBufferCreateInfo = {
-			VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-			nullptr,
-			0,
-			Size,
-			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-			VK_SHARING_MODE_EXCLUSIVE,
-			0, nullptr
-		};
-		VkBuffer StagingBuffer = VK_NULL_HANDLE;
-		VERIFY_SUCCEEDED(vkCreateBuffer(Device, &StagingBufferCreateInfo, nullptr, &StagingBuffer));
-
-		VkMemoryRequirements StagingMemoryRequirements;
-		vkGetBufferMemoryRequirements(Device, StagingBuffer, &StagingMemoryRequirements);
-
-		const VkMemoryAllocateInfo StagingMemoryAllocateInfo = {
-			VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-			nullptr,
-			StagingMemoryRequirements.size,
-			GetMemoryTypeIndex(StagingMemoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
-		};
-		VkDeviceMemory StagingDeviceMemory = VK_NULL_HANDLE;
-		VERIFY_SUCCEEDED(vkAllocateMemory(Device, &StagingMemoryAllocateInfo, nullptr, &StagingDeviceMemory));
-
-		void* Data;
-		VERIFY_SUCCEEDED(vkMapMemory(Device, StagingDeviceMemory, 0, StagingMemoryAllocateInfo.allocationSize, 0, &Data)); {
-			memcpy(Data, Source, Size);
-
-			//!< VK_MEMORY_PROPERTY_HOST_COHERENT_BIT でない場合に必要
-			const VkMappedMemoryRange MappedMemoryRange = {
-				VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
-				nullptr,
-				StagingDeviceMemory,
-				0,
-				VK_WHOLE_SIZE
-			};
-			VERIFY_SUCCEEDED(vkFlushMappedMemoryRanges(Device, 1, &MappedMemoryRange));
-
-		} vkUnmapMemory(Device, StagingDeviceMemory); //!< vkUnmapMemory() はしなくても良い(パフォーマンスへの影響も無い)
-
-		VERIFY_SUCCEEDED(vkBindBufferMemory(Device, StagingBuffer, StagingDeviceMemory, 0));
-
-		//!< デバイスローカルバッファの作成
-		const VkBufferCreateInfo BufferCreateInfo = {
-			VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-			nullptr,
-			0,
-			Size,
-			static_cast<VkBufferUsageFlags>(Usage) | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-			VK_SHARING_MODE_EXCLUSIVE,
-			0, nullptr
-		};
-		VERIFY_SUCCEEDED(vkCreateBuffer(Device, &BufferCreateInfo, nullptr, Buffer));
-
-		VkMemoryRequirements MemoryRequirements;
-		vkGetBufferMemoryRequirements(Device, *Buffer, &MemoryRequirements);
-
-		const VkMemoryAllocateInfo MemoryAllocateInfo = {
-			VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-			nullptr,
-			MemoryRequirements.size,
-			GetMemoryTypeIndex(MemoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
-		};
-		VERIFY_SUCCEEDED(vkAllocateMemory(Device, &MemoryAllocateInfo, nullptr, DeviceMemory));
-
-		VERIFY_SUCCEEDED(vkBindBufferMemory(Device, *Buffer, *DeviceMemory, 0));
-
-		//!< ステージングバッファ → デバイスローカルバッファ コマンド発行
-		const VkCommandBufferBeginInfo BeginInfo = {
-			VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-			nullptr,
-			0,
-			nullptr
-		};
-		VERIFY_SUCCEEDED(vkBeginCommandBuffer(CommandBuffer, &BeginInfo)); {
-			const VkBufferCopy BufferCopy = {
-				0,
-				0,
-				Size
-			};
-			vkCmdCopyBuffer(CommandBuffer, StagingBuffer, *Buffer, 1, &BufferCopy);
-
-			//!< バッファを「転送先として」から「目的のバッファとして」へ変更する
-			const VkBufferMemoryBarrier BufferMemoryBarrier = {
-				VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-				nullptr,
-				VK_ACCESS_MEMORY_WRITE_BIT,
-				AccessFlag,
-				VK_QUEUE_FAMILY_IGNORED,
-				VK_QUEUE_FAMILY_IGNORED,
-				*Buffer,
-				0,
-				VK_WHOLE_SIZE
-			};
-			vkCmdPipelineBarrier(CommandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, PipelineStageFlag, 0, 0, nullptr, 1, &BufferMemoryBarrier, 0, nullptr);
-
-		} VERIFY_SUCCEEDED(vkEndCommandBuffer(CommandBuffer));
-
-		//!< サブミット
-		const VkSubmitInfo SubmitInfo = {
-			VK_STRUCTURE_TYPE_SUBMIT_INFO,
-			nullptr,
-			0, nullptr,
-			nullptr,
-			1, &CommandBuffer,
-			0, nullptr
-		};
-		VERIFY_SUCCEEDED(vkQueueSubmit(GraphicsQueue, 1, &SubmitInfo, VK_NULL_HANDLE));
-		VERIFY_SUCCEEDED(vkDeviceWaitIdle(Device)); //!< フェンスでも良いがここでは vkDeviceWaitIdle() で待つ
-
-		vkDestroyBuffer(Device, StagingBuffer, nullptr);
-		vkFreeMemory(Device, StagingDeviceMemory, nullptr);
+#endif //!< USE_DEPTH_STENCIL
 	}
 	void CreateVertexBuffer()
 	{
-#ifdef DRAW_PLOYGON
+#ifdef DRAW_POLYGON
 		const std::vector<Vertex> Vertices = {
-			{ { 0.0f, 0.5f, 0.0f },{ 1.0f, 0.0f, 0.0f, 1.0f } },
-			{ { 0.5f, -0.5f, 0.0f },{ 0.0f, 1.0f, 0.0f, 1.0f } },
-			{ { -0.5f, -0.5f, 0.0f },{ 0.0f, 0.0f, 1.0f, 1.0f } },
+			{ { 0.0f, 0.5f, 0.0f }, { 1.0f, 0.0f, 0.0f, 1.0f } },
+			{ { 0.5f, -0.5f, 0.0f }, { 0.0f, 1.0f, 0.0f, 1.0f } },
+			{ { -0.5f, -0.5f, 0.0f }, { 0.0f, 0.0f, 1.0f, 1.0f } },
 		};
 		const auto Stride = sizeof(Vertices[0]);
 		const auto Size = static_cast<VkDeviceSize>(Stride * Vertices.size());
@@ -951,12 +960,12 @@ namespace VK {
 
 #ifdef _DEBUG
 		SetObjectName(Device, VK_DEBUG_REPORT_OBJECT_TYPE_BUFFER_EXT, reinterpret_cast<uint64_t>(VertexBuffer), "vertex buffer for triangle");
-#endif
-#endif
+#endif //!< _DEBUG
+#endif //!< DRAW_POLYGON
 	}
 	void CreateIndexBuffer()
 	{
-#ifdef DRAW_PLOYGON
+#ifdef DRAW_POLYGON
 		const std::vector<uint32_t> Indices = { 0, 1, 2 };
 
 		IndexCount = static_cast<uint32_t>(Indices.size());
@@ -1037,13 +1046,13 @@ namespace VK {
 				//!< サブパス
 				VK_SUBPASS_EXTERNAL,							//!< サブパス外から
 				0,												//!< サブパス0へ
-																//!< ステージ
-																VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,			//!< パイプラインの最後
-																VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,	//!< カラー出力
-																												//!< アクセス
-																												VK_ACCESS_MEMORY_READ_BIT,						//!< リード
-																												VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,			//!< ライト
-																												VK_DEPENDENCY_BY_REGION_BIT,
+				//!< ステージ
+				VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,			//!< パイプラインの最後
+				VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,	//!< カラー出力
+				//!< アクセス
+				VK_ACCESS_MEMORY_READ_BIT,						//!< リード
+				VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,			//!< ライト
+				VK_DEPENDENCY_BY_REGION_BIT,
 			},
 			{
 				0,
@@ -1128,7 +1137,7 @@ namespace VK {
 	template<typename T>
 	void CreatePipeline()
 	{
-#ifdef DRAW_PLOYGON
+#ifdef DRAW_POLYGON
 		std::vector<VkShaderModule> ShaderModules;
 		std::vector<VkPipelineShaderStageCreateInfo> PipelineShaderStageCreateInfos;
 		CreateShader(ShaderModules, PipelineShaderStageCreateInfos);
@@ -1297,7 +1306,7 @@ namespace VK {
 			vkDestroyPipelineLayout(Device, PipelineLayout, nullptr);
 			PipelineLayout = VK_NULL_HANDLE;
 		}
-#endif
+#endif //!< DRAW_POLYGON
 	}
 
 	void PopulateCommandBuffer()
@@ -1333,7 +1342,7 @@ namespace VK {
 				static_cast<uint32_t>(ClearValues.size()), ClearValues.data()
 			};
 			vkCmdBeginRenderPass(CommandBuffer, &RenderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE); {
-#ifdef DRAW_PLOYGON
+#ifdef DRAW_POLYGON
 				vkCmdBindPipeline(CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, Pipeline);
 
 				VkDeviceSize Offsets = 0;
@@ -1344,7 +1353,7 @@ namespace VK {
 				InsertMarker(CommandBuffer, "draw polygon", glm::vec4(1, 1, 0, 1));
 #endif
 				vkCmdDrawIndexed(CommandBuffer, IndexCount, 1, 0, 0, 0);
-#endif
+#endif //!< DRAW_POLYGON
 			} vkCmdEndRenderPass(CommandBuffer);
 #ifdef _DEBUG
 			EndMarkerRegion(CommandBuffer);
