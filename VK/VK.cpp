@@ -104,6 +104,7 @@ namespace VK {
 	}
 	void BeginMarkerRegion(VkCommandBuffer CommandBuffer, const char* MarkerName, glm::vec4 Color)
 	{
+		return; //!< #MY_TODO
 		if (VK_NULL_HANDLE != vkCmdDebugMarkerBegin) {
 			VkDebugMarkerMarkerInfoEXT DebugMarkerMarkerInfo = {
 				VK_STRUCTURE_TYPE_DEBUG_MARKER_MARKER_INFO_EXT,
@@ -116,12 +117,14 @@ namespace VK {
 	}
 	void EndMarkerRegion(VkCommandBuffer CommandBuffer)
 	{
+		return; //!< #MY_TODO
 		if (VK_NULL_HANDLE != vkCmdDebugMarkerEnd) {
 			vkCmdDebugMarkerEnd(CommandBuffer);
 		}
 	}
 	void InsertMarker(VkCommandBuffer CommandBuffer, const char* MarkerName, glm::vec4 Color)
 	{
+		return; //!< #MY_TODO
 		if (VK_NULL_HANDLE != vkCmdDebugMarkerInsert) {
 			VkDebugMarkerMarkerInfoEXT DebugMarkerMarkerInfo = {
 				VK_STRUCTURE_TYPE_DEBUG_MARKER_MARKER_INFO_EXT,
