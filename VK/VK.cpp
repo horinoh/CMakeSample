@@ -46,10 +46,12 @@ namespace VK {
 		if (VK_DEBUG_REPORT_ERROR_BIT_EXT & flags) {
 			DebugBreak();
 			std::cout << pMessage << std::endl;
+			return VK_TRUE;
 		}
 		else if (VK_DEBUG_REPORT_WARNING_BIT_EXT & flags) {
 			DebugBreak();
 			std::cout << pMessage << std::endl;
+			return VK_TRUE;
 		}
 		else if (VK_DEBUG_REPORT_INFORMATION_BIT_EXT & flags) {
 			//std::cout << pMessage << std::endl;
@@ -57,11 +59,12 @@ namespace VK {
 		else if (VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT & flags) {
 			DebugBreak();
 			std::cout << pMessage << std::endl;
+			return VK_TRUE;
 		}
 		else if (VK_DEBUG_REPORT_DEBUG_BIT_EXT & flags) {
 			//std::cout << pMessage << std::endl;
 		}
-		return false; //!< エラー時は基本 fakse を返してアボート
+		return VK_FALSE;
 	};
 #endif //!< _DEBUG
 
@@ -143,12 +146,12 @@ namespace VK {
 	VkQueue GraphicsQueue = VK_NULL_HANDLE;
 	VkQueue PresentQueue = VK_NULL_HANDLE;
 
-	VkCommandPool CommandPool = VK_NULL_HANDLE;
-	VkCommandBuffer CommandBuffer = VK_NULL_HANDLE;
-
 	VkFence Fence = VK_NULL_HANDLE;
 	VkSemaphore NextImageAcquiredSemaphore = VK_NULL_HANDLE;	//!< 次イメージ取得完了(プレゼント完了)セマフォ (描画が可能になった) 
 	VkSemaphore RenderFinishedSemaphore = VK_NULL_HANDLE;		//!< 描画完了セマフォ (プレゼントが可能になった)
+
+	VkCommandPool CommandPool = VK_NULL_HANDLE;
+	std::vector<VkCommandBuffer> CommandBuffers;
 
 	VkExtent2D SurfaceExtent2D;
 	VkFormat SurfaceFormat;
@@ -327,6 +330,7 @@ namespace VK {
 
 		VERIFY_SUCCEEDED(vkBindBufferMemory(Device, *Buffer, *DeviceMemory, 0));
 
+		const auto CB = CommandBuffers[0];
 		//!< ステージングバッファ → デバイスローカルバッファ コマンド発行
 		const VkCommandBufferBeginInfo BeginInfo = {
 			VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -334,13 +338,13 @@ namespace VK {
 			0,
 			nullptr
 		};
-		VERIFY_SUCCEEDED(vkBeginCommandBuffer(CommandBuffer, &BeginInfo)); {
+		VERIFY_SUCCEEDED(vkBeginCommandBuffer(CB, &BeginInfo)); {
 			const VkBufferCopy BufferCopy = {
 				0,
 				0,
 				Size
 			};
-			vkCmdCopyBuffer(CommandBuffer, StagingBuffer, *Buffer, 1, &BufferCopy);
+			vkCmdCopyBuffer(CB, StagingBuffer, *Buffer, 1, &BufferCopy);
 
 			//!< バッファを「転送先として」から「目的のバッファとして」へ変更する
 			const VkBufferMemoryBarrier BufferMemoryBarrier = {
@@ -354,9 +358,9 @@ namespace VK {
 				0,
 				VK_WHOLE_SIZE
 			};
-			vkCmdPipelineBarrier(CommandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, PipelineStageFlag, 0, 0, nullptr, 1, &BufferMemoryBarrier, 0, nullptr);
+			vkCmdPipelineBarrier(CB, VK_PIPELINE_STAGE_TRANSFER_BIT, PipelineStageFlag, 0, 0, nullptr, 1, &BufferMemoryBarrier, 0, nullptr);
 
-		} VERIFY_SUCCEEDED(vkEndCommandBuffer(CommandBuffer));
+		} VERIFY_SUCCEEDED(vkEndCommandBuffer(CB));
 
 		//!< サブミット
 		const VkSubmitInfo SubmitInfo = {
@@ -364,7 +368,7 @@ namespace VK {
 			nullptr,
 			0, nullptr,
 			nullptr,
-			1, &CommandBuffer,
+			1, &CB,
 			0, nullptr
 		};
 		VERIFY_SUCCEEDED(vkQueueSubmit(GraphicsQueue, 1, &SubmitInfo, VK_NULL_HANDLE));
@@ -440,6 +444,7 @@ namespace VK {
 #ifdef _DEBUG
 			"VK_LAYER_LUNARG_standard_validation",
 			"VK_LAYER_LUNARG_object_tracker",
+			//"VK_LAYER_LUNARG_api_dump",
 #endif
 		};
 		const std::vector<const char*> EnabledExtensions = {
@@ -656,27 +661,6 @@ namespace VK {
 		vkCmdDebugMarkerInsert = GET_DEVICE_PROC_ADDR(Device, CmdDebugMarkerInsertEXT);
 	}
 #endif
-	void CreateCommandBuffer()
-	{
-		//!< コマンドプールの作成
-		const VkCommandPoolCreateInfo CommandPoolInfo = {
-			VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-			nullptr,
-			VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT | VK_COMMAND_POOL_CREATE_TRANSIENT_BIT, //!< VK_COMMAND_POOL_CREATE_TRANSIENT_BIT 短期間にリセットや解放される場合に指定する
-			GraphicsQueueFamilyIndex
-		};
-		VERIFY_SUCCEEDED(vkCreateCommandPool(Device, &CommandPoolInfo, nullptr, &CommandPool));
-
-		//!< コマンドバッファの作成
-		const VkCommandBufferAllocateInfo CommandBufferAllocateInfo = {
-			VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-			nullptr,
-			CommandPool,
-			VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-			1
-		};
-		VERIFY_SUCCEEDED(vkAllocateCommandBuffers(Device, &CommandBufferAllocateInfo, &CommandBuffer))
-	}
 	void CreateFence()
 	{
 		const VkFenceCreateInfo FenceCreateInfo = {
@@ -695,6 +679,28 @@ namespace VK {
 		};
 		VERIFY_SUCCEEDED(vkCreateSemaphore(Device, &SemaphoreCreateInfo, nullptr, &NextImageAcquiredSemaphore));
 		VERIFY_SUCCEEDED(vkCreateSemaphore(Device, &SemaphoreCreateInfo, nullptr, &RenderFinishedSemaphore));
+	}
+	void CreateCommandBuffer(const size_t Count)
+	{
+		//!< コマンドプールの作成
+		const VkCommandPoolCreateInfo CommandPoolInfo = {
+			VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+			nullptr,
+			VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT | VK_COMMAND_POOL_CREATE_TRANSIENT_BIT, //!< VK_COMMAND_POOL_CREATE_TRANSIENT_BIT 短期間にリセットや解放される場合に指定する
+			GraphicsQueueFamilyIndex
+		};
+		VERIFY_SUCCEEDED(vkCreateCommandPool(Device, &CommandPoolInfo, nullptr, &CommandPool));
+
+		//!< コマンドバッファの作成
+		CommandBuffers.resize(Count);
+		const VkCommandBufferAllocateInfo CommandBufferAllocateInfo = {
+			VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+			nullptr,
+			CommandPool,
+			VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+			static_cast<uint32_t>(CommandBuffers.size())
+		};
+		VERIFY_SUCCEEDED(vkAllocateCommandBuffers(Device, &CommandBufferAllocateInfo, CommandBuffers.data()))
 	}
 	void CreateSwapchain()
 	{
@@ -785,6 +791,9 @@ namespace VK {
 		VERIFY_SUCCEEDED(vkGetSwapchainImagesKHR(Device, Swapchain, &SwapchainImageCount, SwapchainImages.data()));
 		//!< スワップチェインイメージはプレゼント前迄に VK_IMAGE_LAYOUT_PRESENT_SRC_KHR にすること
 
+		//!< スワップチェインイメージ数が決まったので、ここでコマンドバッファを作成
+		CreateCommandBuffer(SwapchainImages.size());
+
 		//!< スワップチェインイメージビューの作成
 		SwapchainImageViews.resize(SwapchainImageCount);
 		const VkComponentMapping ComponentMapping = {
@@ -809,7 +818,8 @@ namespace VK {
 			VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
 			&CommandBufferInheritanceInfo
 		};
-		VERIFY_SUCCEEDED(vkBeginCommandBuffer(CommandBuffer, &CommandBufferBeginInfo)); {
+		const auto CB = CommandBuffers[0];
+		VERIFY_SUCCEEDED(vkBeginCommandBuffer(CB, &CommandBufferBeginInfo)); {
 			for (uint32_t i = 0; i < SwapchainImageCount; ++i) {
 				const VkImageSubresourceRange ImageSubresourceRange = {
 					VK_IMAGE_ASPECT_COLOR_BIT,
@@ -853,7 +863,7 @@ namespace VK {
 					SwapchainImages[i],
 					ImageSubresourceRange
 				};
-				vkCmdPipelineBarrier(CommandBuffer,
+				vkCmdPipelineBarrier(CB,
 					VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
 					0,
 					0, nullptr,
@@ -862,16 +872,16 @@ namespace VK {
 
 					//!< 初期カラーで塗りつぶす
 					const VkClearColorValue Green = { 0.0f, 1.0f, 0.0f, 1.0f };
-					vkCmdClearColorImage(CommandBuffer, SwapchainImages[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &Green, 1, &ImageSubresourceRange);
+					vkCmdClearColorImage(CB, SwapchainImages[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &Green, 1, &ImageSubresourceRange);
 
-				} vkCmdPipelineBarrier(CommandBuffer,
+				} vkCmdPipelineBarrier(CB,
 					VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
 					0,
 					0, nullptr,
 					0, nullptr,
 					1, &ImageMemoryBarrier_TransferToPresent);
 			}
-		} VERIFY_SUCCEEDED(vkEndCommandBuffer(CommandBuffer));
+		} VERIFY_SUCCEEDED(vkEndCommandBuffer(CB));
 
 		VERIFY_SUCCEEDED(vkDeviceWaitIdle(Device));
 		const VkPipelineStageFlags PipelineStageFlags = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
@@ -879,16 +889,11 @@ namespace VK {
 			VK_STRUCTURE_TYPE_SUBMIT_INFO,
 			nullptr,
 			0, nullptr, &PipelineStageFlags,
-			1, &CommandBuffer,
+			1, &CB,
 			0, nullptr
 		};
-		VERIFY_SUCCEEDED(vkQueueSubmit(GraphicsQueue, 1, &SubmitInfo, Fence));
+		VERIFY_SUCCEEDED(vkQueueSubmit(GraphicsQueue, 1, &SubmitInfo, VK_NULL_HANDLE));
 		VERIFY_SUCCEEDED(vkQueueWaitIdle(GraphicsQueue));
-
-		WaitForFence();
-
-		//!< 次のイメージが取得できたらセマフォが通知される
-		VERIFY_SUCCEEDED(vkAcquireNextImageKHR(Device, Swapchain, UINT64_MAX, NextImageAcquiredSemaphore, VK_NULL_HANDLE, &SwapchainImageIndex));
 	}
 	void CreateDepthStencil()
 	{
@@ -1312,56 +1317,52 @@ namespace VK {
 #endif //!< DRAW_POLYGON
 	}
 
-	void PopulateCommandBuffer()
+	void PopulateCommandBuffer(VkCommandBuffer CB, VkFramebuffer FB)
 	{
-		VERIFY_SUCCEEDED(vkResetCommandPool(Device, CommandPool, VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT));
+		//VERIFY_SUCCEEDED(vkResetCommandPool(Device, CommandPool, VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT));
 
 		const VkCommandBufferBeginInfo BeginInfo = {
 			VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
 			nullptr,
-#if 1
-			VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-#else
-			VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT, //!< 前回のサブミットが完了していなくても、再度サブミットされ得る
-#endif
+			0,
 			nullptr
 		};
 
-		VERIFY_SUCCEEDED(vkBeginCommandBuffer(CommandBuffer, &BeginInfo)); {
+		VERIFY_SUCCEEDED(vkBeginCommandBuffer(CB, &BeginInfo)); {
 #ifdef _DEBUG
-			BeginMarkerRegion(CommandBuffer, "begining of command buffer", glm::vec4(1, 0, 0, 1));
+			BeginMarkerRegion(CB, "begining of command buffer", glm::vec4(1, 0, 0, 1));
 #endif
-			vkCmdSetViewport(CommandBuffer, 0, 1, &Viewport);
-			vkCmdSetScissor(CommandBuffer, 0, 1, &ScissorRect);
+			vkCmdSetViewport(CB, 0, 1, &Viewport);
+			vkCmdSetScissor(CB, 0, 1, &ScissorRect);
 			const VkRenderPassBeginInfo RenderPassBeginInfo = {
 				VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
 				nullptr,
 				RenderPass,
-				Framebuffers[SwapchainImageIndex],
+				FB,
 				{
 					0, 0,
 					SurfaceExtent2D.width, SurfaceExtent2D.height
 				},
 				static_cast<uint32_t>(ClearValues.size()), ClearValues.data()
 			};
-			vkCmdBeginRenderPass(CommandBuffer, &RenderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE); {
+			vkCmdBeginRenderPass(CB, &RenderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE); {
 #ifdef DRAW_POLYGON
-				vkCmdBindPipeline(CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, Pipeline);
+				vkCmdBindPipeline(CB, VK_PIPELINE_BIND_POINT_GRAPHICS, Pipeline);
 
 				VkDeviceSize Offsets = 0;
-				vkCmdBindVertexBuffers(CommandBuffer, 0, 1, &VertexBuffer, &Offsets);
-				vkCmdBindIndexBuffer(CommandBuffer, IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdBindVertexBuffers(CB, 0, 1, &VertexBuffer, &Offsets);
+				vkCmdBindIndexBuffer(CB, IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
 #ifdef _DEBUG
-				InsertMarker(CommandBuffer, "draw polygon", glm::vec4(1, 1, 0, 1));
+				InsertMarker(CB, "draw polygon", glm::vec4(1, 1, 0, 1));
 #endif
-				vkCmdDrawIndexed(CommandBuffer, IndexCount, 1, 0, 0, 0);
+				vkCmdDrawIndexed(CB, IndexCount, 1, 0, 0, 0);
 #endif //!< DRAW_POLYGON
-			} vkCmdEndRenderPass(CommandBuffer);
+			} vkCmdEndRenderPass(CB);
 #ifdef _DEBUG
-			EndMarkerRegion(CommandBuffer);
+			EndMarkerRegion(CB);
 #endif
-		} VERIFY_SUCCEEDED(vkEndCommandBuffer(CommandBuffer));
+		} VERIFY_SUCCEEDED(vkEndCommandBuffer(CB));
 	}
 	void Present()
 	{
@@ -1373,9 +1374,6 @@ namespace VK {
 			nullptr
 		};
 		VERIFY_SUCCEEDED(vkQueuePresentKHR(GraphicsQueue, &PresentInfo));
-
-		//!< 次のイメージが取得できたらセマフォが通知される
-		VERIFY_SUCCEEDED(vkAcquireNextImageKHR(Device, Swapchain, UINT64_MAX, NextImageAcquiredSemaphore, VK_NULL_HANDLE, &SwapchainImageIndex));
 	}
 
 	void OnCreate(HINSTANCE hInst, HWND hWnd)
@@ -1390,7 +1388,6 @@ namespace VK {
 #ifdef _DEBUG
 		CreateDebugMarker();
 #endif
-		CreateCommandBuffer();
 		CreateFence();
 		CreateSemaphore();
 		CreateSwapchain();
@@ -1401,6 +1398,10 @@ namespace VK {
 		CreateFramebuffer();
 		CreateViewport();
 		CreatePipeline<Vertex>();
+
+		for (auto i = 0; i < CommandBuffers.size(); ++i) {
+			PopulateCommandBuffer(CommandBuffers[i], Framebuffers[i]);
+		}
 	}
 	void OnSize(HINSTANCE hInst, HWND hWnd)
 	{
@@ -1410,21 +1411,19 @@ namespace VK {
 	}
 	void OnPaint(HWND hWhd)
 	{
-		PopulateCommandBuffer();
+		WaitForFence();
 
-		VERIFY_SUCCEEDED(vkDeviceWaitIdle(Device));
+		VERIFY_SUCCEEDED(vkAcquireNextImageKHR(Device, Swapchain, UINT64_MAX, NextImageAcquiredSemaphore, VK_NULL_HANDLE, &SwapchainImageIndex));
+
 		const VkPipelineStageFlags PipelineStageFlags = VK_PIPELINE_STAGE_TRANSFER_BIT; //VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
 		const VkSubmitInfo SubmitInfo = {
 			VK_STRUCTURE_TYPE_SUBMIT_INFO,
 			nullptr,
 			1, &NextImageAcquiredSemaphore, &PipelineStageFlags,	//!< 次イメージが取得できる(プレゼント完了)までウエイト
-			1, &CommandBuffer,
+			1, &CommandBuffers[SwapchainImageIndex],
 			1, &RenderFinishedSemaphore								//!< 描画完了を通知する
 		};
 		VERIFY_SUCCEEDED(vkQueueSubmit(GraphicsQueue, 1, &SubmitInfo, Fence));
-		VERIFY_SUCCEEDED(vkQueueWaitIdle(GraphicsQueue));
-
-		WaitForFence();
 
 		Present();
 	}
@@ -1486,6 +1485,11 @@ namespace VK {
 			vkDestroySemaphore(Device, RenderFinishedSemaphore, nullptr);
 			RenderFinishedSemaphore = VK_NULL_HANDLE;
 		}
+		vkFreeCommandBuffers(Device, CommandPool, static_cast<uint32_t>(CommandBuffers.size()), CommandBuffers.data());
+		if (VK_NULL_HANDLE != CommandPool) {
+			vkDestroyCommandPool(Device, CommandPool, nullptr);
+			CommandPool = VK_NULL_HANDLE;
+		}
 		if (VK_NULL_HANDLE != NextImageAcquiredSemaphore) {
 			vkDestroySemaphore(Device, NextImageAcquiredSemaphore, nullptr);
 			RenderFinishedSemaphore = VK_NULL_HANDLE;
@@ -1493,14 +1497,6 @@ namespace VK {
 		if (VK_NULL_HANDLE != Fence) {
 			vkDestroyFence(Device, Fence, nullptr);
 			Fence = VK_NULL_HANDLE;
-		}
-		if (VK_NULL_HANDLE != CommandBuffer) {
-			vkFreeCommandBuffers(Device, CommandPool, 1, &CommandBuffer);
-			CommandBuffer = VK_NULL_HANDLE;
-		}
-		if (VK_NULL_HANDLE != CommandPool) {
-			vkDestroyCommandPool(Device, CommandPool, nullptr);
-			CommandPool = VK_NULL_HANDLE;
 		}
 		if (VK_NULL_HANDLE != Device) {
 			vkDestroyDevice(Device, nullptr);
