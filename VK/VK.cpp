@@ -33,6 +33,7 @@
 
 #define DRAW_POLYGON
 #define USE_DEPTH_STENCIL
+#define USE_RENDER_PASS_CLEAR
 
 namespace VK {
 	VkInstance Instance = VK_NULL_HANDLE;
@@ -181,7 +182,9 @@ namespace VK {
 
 	VkPipeline Pipeline = VK_NULL_HANDLE;
 
-	const VkClearColorValue SkyBlue = { 0.529411793f, 0.807843208f, 0.921568692f, 1.0f };
+	static const VkClearColorValue SkyBlue = { 0.529411793f, 0.807843208f, 0.921568692f, 1.0f };
+	static const VkClearColorValue Green = { 0.0f, 1.0f, 0.0f, 1.0f };
+#ifdef USE_RENDER_PASS_CLEAR
 	const std::vector<VkClearValue> ClearValues = {
 		{
 			{ SkyBlue },
@@ -190,6 +193,7 @@ namespace VK {
 #endif
 		}
 	};
+#endif
 
 	uint32_t GetMemoryTypeIndex(uint32_t MemoryTypeBits, VkMemoryPropertyFlags MemoryPropertyFlags)
 	{
@@ -789,10 +793,112 @@ namespace VK {
 		VERIFY_SUCCEEDED(vkGetSwapchainImagesKHR(Device, Swapchain, &SwapchainImageCount, nullptr));
 		SwapchainImages.resize(SwapchainImageCount);
 		VERIFY_SUCCEEDED(vkGetSwapchainImagesKHR(Device, Swapchain, &SwapchainImageCount, SwapchainImages.data()));
-		//!< スワップチェインイメージはプレゼント前迄に VK_IMAGE_LAYOUT_PRESENT_SRC_KHR にすること
 
 		//!< スワップチェインイメージ数が決まったので、ここでコマンドバッファを作成
 		CreateCommandBuffer(SwapchainImages.size());
+
+		//!< イメージレイアウトをプレゼンテーション可能なレイアウトへ変更
+		{
+			const auto CB = CommandBuffers[0];
+			const VkCommandBufferInheritanceInfo CommandBufferInheritanceInfo = {
+				VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO,
+				nullptr,
+				VK_NULL_HANDLE,
+				0,
+				VK_NULL_HANDLE,
+				VK_FALSE,
+				0,
+				0
+			};
+			const VkCommandBufferBeginInfo CommandBufferBeginInfo = {
+				VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+				nullptr,
+				VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+				&CommandBufferInheritanceInfo
+			};
+			const VkImageSubresourceRange ImageSubresourceRange = {
+				VK_IMAGE_ASPECT_COLOR_BIT,
+				0, 1,
+				0, 1
+			};
+			VERIFY_SUCCEEDED(vkBeginCommandBuffer(CB, &CommandBufferBeginInfo)); {
+				for (auto& i : SwapchainImages) {
+#ifdef USE_RENDER_PASS_CLEAR
+					//!< レンダーパスでクリアをするので初期カラーは使用しない
+					const VkImageMemoryBarrier ImageMemoryBarrier = {
+						VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+						nullptr,
+						0,
+						VK_ACCESS_MEMORY_READ_BIT,
+						VK_IMAGE_LAYOUT_UNDEFINED, //!<「現在のレイアウト」または「UNDEFINED」を指定すること、「UNDEFINED」ではイメージコンテンツは保持されない
+						VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, //!< プレゼンテーション可能な VK_IMAGE_LAYOUT_PRESENT_SRC_KHR へ
+						PresentQueueFamilyIndex,
+						PresentQueueFamilyIndex,
+						i,
+						ImageSubresourceRange
+					};
+					vkCmdPipelineBarrier(CB,
+						VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+						0,
+						0, nullptr,
+						0, nullptr,
+						1, &ImageMemoryBarrier);
+#else
+					//!< レンダーパスでクリアしないので初期カラーを指定する
+					const VkImageMemoryBarrier ImageMemoryBarrier_PresentToTransfer = {
+						VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+						nullptr,
+						0,
+						VK_ACCESS_TRANSFER_WRITE_BIT,
+						VK_IMAGE_LAYOUT_UNDEFINED,
+						VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, //!< デスティネーションへ
+						PresentQueueFamilyIndex,
+						PresentQueueFamilyIndex,
+						i,
+						ImageSubresourceRange
+					};
+					vkCmdPipelineBarrier(CB,
+						VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+						0,
+						0, nullptr,
+						0, nullptr,
+						1, &ImageMemoryBarrier_PresentToTransfer);
+
+					//!< 初期カラー
+					vkCmdClearColorImage(CB, i, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &Green, 1, &ImageSubresourceRange);
+
+					const VkImageMemoryBarrier ImageMemoryBarrier_TransferToPresent = {
+						VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+						nullptr,
+						VK_ACCESS_TRANSFER_WRITE_BIT,
+						VK_ACCESS_MEMORY_READ_BIT,
+						VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, //!< デスティネーションから
+						VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, //!< プレゼンテーション可能な VK_IMAGE_LAYOUT_PRESENT_SRC_KHR へ
+						PresentQueueFamilyIndex,
+						PresentQueueFamilyIndex,
+						i,
+						ImageSubresourceRange
+					};
+					vkCmdPipelineBarrier(CB,
+						VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+						0,
+						0, nullptr,
+						0, nullptr,
+						1, &ImageMemoryBarrier_TransferToPresent);
+#endif
+				}
+			} VERIFY_SUCCEEDED(vkEndCommandBuffer(CB));
+			VERIFY_SUCCEEDED(vkDeviceWaitIdle(Device));
+			const VkSubmitInfo SubmitInfo = {
+				VK_STRUCTURE_TYPE_SUBMIT_INFO,
+				nullptr,
+				0, nullptr, nullptr,
+				1,  &CB,
+				0, nullptr
+			};
+			VERIFY_SUCCEEDED(vkQueueSubmit(GraphicsQueue, 1, &SubmitInfo, VK_NULL_HANDLE));
+			VERIFY_SUCCEEDED(vkQueueWaitIdle(GraphicsQueue));
+		}
 
 		//!< スワップチェインイメージビューの作成
 		SwapchainImageViews.resize(SwapchainImageCount);
@@ -802,98 +908,24 @@ namespace VK {
 			VK_COMPONENT_SWIZZLE_IDENTITY,
 			VK_COMPONENT_SWIZZLE_IDENTITY
 		};
-		const VkCommandBufferInheritanceInfo CommandBufferInheritanceInfo = {
-			VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO,
-			nullptr,
-			VK_NULL_HANDLE,
-			0,
-			VK_NULL_HANDLE,
-			VK_FALSE,
-			0,
-			0
-		};
-		const VkCommandBufferBeginInfo CommandBufferBeginInfo = {
-			VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-			nullptr,
-			VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-			&CommandBufferInheritanceInfo
-		};
-		const auto CB = CommandBuffers[0];
-		VERIFY_SUCCEEDED(vkBeginCommandBuffer(CB, &CommandBufferBeginInfo)); {
-			for (uint32_t i = 0; i < SwapchainImageCount; ++i) {
-				const VkImageSubresourceRange ImageSubresourceRange = {
-					VK_IMAGE_ASPECT_COLOR_BIT,
-					0, 1,
-					0, 1
-				};
-				const VkImageViewCreateInfo ImageViewCreateInfo = {
-					VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-					nullptr,
-					0,
-					SwapchainImages[i],
-					VK_IMAGE_VIEW_TYPE_2D,
-					SurfaceFormats[0].format,
-					ComponentMapping,
-					ImageSubresourceRange
-				};
-				VERIFY_SUCCEEDED(vkCreateImageView(Device, &ImageViewCreateInfo, nullptr, &SwapchainImageViews[i]));
-
-				//!< イメージをカラーで初期化、イメージレイアウトの変更
-				const VkImageMemoryBarrier ImageMemoryBarrier_PresentToTransfer = {
-					VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-					nullptr,
-					0,
-					VK_ACCESS_TRANSFER_WRITE_BIT,
-					VK_IMAGE_LAYOUT_UNDEFINED, //!<「現在のレイアウト」or「UNDEFINED」を指定すること、イメージコンテンツを保持したい場合は「UNDEFINED」はダメ
-					VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-					PresentQueueFamilyIndex,
-					PresentQueueFamilyIndex,
-					SwapchainImages[i],
-					ImageSubresourceRange
-				};
-				const VkImageMemoryBarrier ImageMemoryBarrier_TransferToPresent = {
-					VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-					nullptr,
-					VK_ACCESS_TRANSFER_WRITE_BIT,
-					VK_ACCESS_MEMORY_READ_BIT,
-					VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-					VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-					PresentQueueFamilyIndex,
-					PresentQueueFamilyIndex,
-					SwapchainImages[i],
-					ImageSubresourceRange
-				};
-				vkCmdPipelineBarrier(CB,
-					VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-					0,
-					0, nullptr,
-					0, nullptr,
-					1, &ImageMemoryBarrier_PresentToTransfer); {
-
-					//!< 初期カラーで塗りつぶす
-					const VkClearColorValue Green = { 0.0f, 1.0f, 0.0f, 1.0f };
-					vkCmdClearColorImage(CB, SwapchainImages[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &Green, 1, &ImageSubresourceRange);
-
-				} vkCmdPipelineBarrier(CB,
-					VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-					0,
-					0, nullptr,
-					0, nullptr,
-					1, &ImageMemoryBarrier_TransferToPresent);
-			}
-		} VERIFY_SUCCEEDED(vkEndCommandBuffer(CB));
-
-		VERIFY_SUCCEEDED(vkDeviceWaitIdle(Device));
-		const VkPipelineStageFlags PipelineStageFlags = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-		const VkSubmitInfo SubmitInfo = {
-			VK_STRUCTURE_TYPE_SUBMIT_INFO,
-			nullptr,
-			0, nullptr, &PipelineStageFlags,
-			1, &CB,
-			0, nullptr
-		};
-		VERIFY_SUCCEEDED(vkQueueSubmit(GraphicsQueue, 1, &SubmitInfo, VK_NULL_HANDLE));
-		VERIFY_SUCCEEDED(vkQueueWaitIdle(GraphicsQueue));
+		for (uint32_t i = 0; i < SwapchainImageCount; ++i) {
+			const VkImageSubresourceRange ImageSubresourceRange = {
+				VK_IMAGE_ASPECT_COLOR_BIT,
+				0, 1,
+				0, 1
+			};
+			const VkImageViewCreateInfo ImageViewCreateInfo = {
+				VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+				nullptr,
+				0,
+				SwapchainImages[i],
+				VK_IMAGE_VIEW_TYPE_2D,
+				SurfaceFormats[0].format,
+				ComponentMapping,
+				ImageSubresourceRange
+			};
+			VERIFY_SUCCEEDED(vkCreateImageView(Device, &ImageViewCreateInfo, nullptr, &SwapchainImageViews[i]));
+		}
 	}
 	void CreateDepthStencil()
 	{
@@ -1005,7 +1037,11 @@ namespace VK {
 				0,
 				SurfaceFormat,
 				VK_SAMPLE_COUNT_1_BIT,
-				VK_ATTACHMENT_LOAD_OP_CLEAR, //!< レンダーパスの開始時にクリアを行う
+#ifdef USE_RENDER_PASS_CLEAR
+				VK_ATTACHMENT_LOAD_OP_CLEAR, //!< レンダーパスの開始時にクリアを行う (VkRenderPassBeginInfoにクリアカラーを指定する必要あり)
+#else
+				VK_ATTACHMENT_LOAD_OP_DONT_CARE, 
+#endif
 				VK_ATTACHMENT_STORE_OP_STORE, //!< レンダーパス終了時に保存する(表示するのに必要)
 				VK_ATTACHMENT_LOAD_OP_DONT_CARE, //!< (ステンシルは)カラーアタッチメントの場合は関係ない
 				VK_ATTACHMENT_STORE_OP_DONT_CARE,
@@ -1017,7 +1053,11 @@ namespace VK {
 				0,
 				DepthFormat,
 				VK_SAMPLE_COUNT_1_BIT,
+#ifdef USE_RENDER_PASS_CLEAR
 				VK_ATTACHMENT_LOAD_OP_CLEAR,
+#else
+				VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+#endif
 				VK_ATTACHMENT_STORE_OP_DONT_CARE,
 				VK_ATTACHMENT_LOAD_OP_DONT_CARE,
 				VK_ATTACHMENT_STORE_OP_DONT_CARE,
@@ -1343,7 +1383,11 @@ namespace VK {
 					0, 0,
 					SurfaceExtent2D.width, SurfaceExtent2D.height
 				},
+#ifdef USE_RENDER_PASS_CLEAR
 				static_cast<uint32_t>(ClearValues.size()), ClearValues.data()
+#else
+				0, nullptr
+#endif
 			};
 			vkCmdBeginRenderPass(CB, &RenderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE); {
 #ifdef DRAW_POLYGON
