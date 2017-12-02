@@ -16,10 +16,10 @@ if(VULKAN_FOUND)
 else()
     message("VULKAN package not found")
     
-    include_directories("$ENV{VK_SDK_PATH}\\Include")
-    link_directories("$ENV{VK_SDK_PATH}\\Lib")
-    link_libraries("vulkan-1")
-    add_definitions("-DVK_USE_PLATFORM_WIN32_KHR")
+    include_directories($ENV{VK_SDK_PATH}\\Include)
+    link_directories($ENV{VK_SDK_PATH}\\Lib)
+    link_libraries(vulkan-1)
+    add_definitions(-DVK_USE_PLATFORM_WIN32_KHR)
 endif()
 
 # GLM
@@ -62,6 +62,6 @@ add_executable(${ProjectName} ${SourceFiles} ${HeaderFiles} ${ResourceFiles} ${I
 set_target_properties(${ProjectName} PROPERTIES LINK_FLAGS "/SUBSYSTEM:WINDOWS")
 
 # target_link_libaries() は add_executable() より下でやること
-if(VULKAN_FOUND)
-  target_link_libraries(${ProjectName} ${VULKAN_LIBRARIES})
-endif()
+#if(VULKAN_FOUND)
+#  target_link_libraries(${ProjectName} ${VULKAN_LIBRARIES})
+#endif()
