@@ -11,7 +11,15 @@ find_package(VULKAN REQUIRED)
 if(VULKAN_FOUND)
     include_directories(${VULKAN_INCLUDE_DIRS})
     link_directories(${VULKAN_LIBRARY_DIRS})
+    link_libraries(${VULKAN_LIBRARIES})
     add_definitions(${VULKAN_DEFINITIONS})
+else()
+    message("VULKAN package not found")
+    
+    include_directories("$ENV{VK_SDK_PATH}\\Include")
+    link_directories("$ENV{VK_SDK_PATH}\\Lib")
+    link_libraries("vulkan-1")
+    add_definitions("-DVK_USE_PLATFORM_WIN32_KHR")
 endif()
 
 # GLM
@@ -19,6 +27,10 @@ set(GLM_DIR .)
 find_package(GLM REQUIRED)
 if(GLM_FOUND)
     include_directories(${GLM_INCLUDE_DIRS})
+else()
+    message("GLM package not found")
+    
+    include_directories($ENV{GLM_SDK_PATH})
 endif()
 
 # GLI
@@ -26,6 +38,10 @@ set(GLI_DIR .)
 find_package(GLI REQUIRED)
 if(GLI_FOUND)
     include_directories(${GLI_INCLUDE_DIRS})
+else()
+    message("GLI package not found")
+    
+    include_directories($ENV{GLI_SDK_PATH})
 endif()
 
 # Windows ビルド用に予め用意したファイル
