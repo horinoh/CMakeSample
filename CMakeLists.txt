@@ -1,4 +1,6 @@
-﻿cmake_minimum_required(VERSION 3.6.1)
+﻿# File - Delete cache してから 「Visual Studio のバージョンと x64 等を選択して」 Generate する
+
+cmake_minimum_required(VERSION 3.6.1)
 
 # ソリューション
 project(MyProject)
